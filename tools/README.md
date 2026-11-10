@@ -13,6 +13,7 @@ build/    what turns a checkout into a binary: the cells pull and compile,
 release/  packing and publishing, and their rehearsals: pack*, publish*,
           release*, the macOS and Windows halves, the installer mirror
 install/  the installers a release carries beside its binary, and their test
+boxes/    bootstrap Nodecode on boxes.dev Template / cloud boxes
 qa/       live checks against real chat platforms and real upgrades
 probes/   measurements run by hand: the turn probe and the body relay
 ```
