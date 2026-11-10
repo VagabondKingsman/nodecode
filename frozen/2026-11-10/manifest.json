@@ -1,0 +1,17 @@
+{
+  "frozen_at": "2026-11-10T20:56:50Z",
+  "box": "e2b.local (VM, disposable)",
+  "session": "s-1CKKCZWG",
+  "model": {"provider": "nodecode-free", "model": "nodecode-cyber-v1", "effort": "high"},
+  "release": "98dd6dc80",
+  "layer_definitions": ["demo/sum-sq"],
+  "generations": 122,
+  "artifacts_on_persistent_disk": {
+    "home-portable.tar.gz": "config + layer + its git history (15 KB)",
+    "home-rest.tar.gz": "context, hub, generations, secrets (171 KB)",
+    "store/history.db{,-wal,-shm}": "sessions and checkpoints (4.9 MB)",
+    "heap-snapshot.tar.gz": "running organism heap, release-pinned",
+    "release-98dd6dc80/": "the binary and source it ran on (104 MB)"
+  },
+  "proved": "second organism booted from the artifacts: cell cursor-agent: layer, 1 definition, unsealed; gateway ready"
+}
