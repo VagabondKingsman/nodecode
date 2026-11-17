@@ -104,7 +104,32 @@ nodecode gateway status    # or confirm serve is listening
 pgrep -af 'nodecode serve'
 ```
 
-## Giữ box khỏi tự đi ngủ
+## Giữ box khỏi tự đi ngủ — và dựng lại nếu vẫn bị ngủ
+
+Ba lớp, cài hết:
+
+```sh
+cp tools/boxes/keep-awake.sh tools/boxes/box-watchdog.sh tools/boxes/resume-heal.sh ~/.local/bin/
+cp tools/boxes/systemd/box-watchdog.* tools/boxes/systemd/box-resume-heal.service ~/.config/systemd/user/
+mkdir -p ~/.config/systemd/user/osa.service.d ~/.config/systemd/user/nodecode-gateway.service.d
+cp tools/boxes/systemd/drop-ins/osa-restart.conf ~/.config/systemd/user/osa.service.d/restart.conf
+cp tools/boxes/systemd/drop-ins/nodecode-gateway-restart.conf ~/.config/systemd/user/nodecode-gateway.service.d/restart.conf
+systemctl --user daemon-reload
+systemctl --user enable --now box-watchdog.timer box-resume-heal.service
+```
+
+1. **Giữ** — `keep-awake.sh` đặt hold của boxes.dev (30 phút, tự gia hạn). API hỏng thì giãn nhịp 1→10 phút
+   và ghi log, không đập liên tục.
+2. **Canh** — `box-watchdog.sh` mỗi 30 giây. Nó so **đồng hồ thật với đồng hồ đơn điệu**; lệch > 60 giây
+   nghĩa là máy vừa bị ngủ, và nó **restart cả OSA lẫn gateway** ngay (ngủ làm đứt mọi kết nối, tiến trình
+   "vẫn sống" sau đó thường là nửa hỏng), rồi giữ box lại. Nó cũng dựng lại OSA sau 2 nhịp không trả lời
+   health, và bật lại gateway nếu unit chết.
+3. **Không bỏ cuộc** — drop-in đặt `Restart=always` và `StartLimitIntervalSec=0` cho cả hai unit, nên
+   systemd không bao giờ thôi dựng lại. `loginctl enable-linger boxes` để user manager chạy dù không ai đăng nhập.
+
+Ở đây không có `suspend.target` cho systemd **user**, nên đường phát hiện ngủ là đồng hồ chứ không phải hook.
+
+## Giữ box khỏi tự đi ngủ (bản cũ, một lớp)
 
 boxes.dev cho box ngủ khi không còn ai nhìn terminal (ví dụ điện thoại đã tắt app), và một task đang
 chạy sẽ đứng giữa chừng. Cách chặn là **giữ** box bằng API của chính boxes.dev, tự gia hạn:
