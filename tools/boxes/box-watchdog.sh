@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 #  -*- mode: shell-script -*-
 # Một nhịp canh box: (a) thấy máy vừa ngủ thì dựng lại việc, (b) thấy OSA/gateway chết hay treo thì
 # dựng lại, (c) luôn cố giữ box khỏi ngủ tiếp. Chạy bởi box-watchdog.timer mỗi 30 giây.
@@ -27,7 +28,7 @@ heal() {
   say "dựng lại: $1"
   systemctl --user restart osa.service >/dev/null 2>&1 || true
   systemctl --user restart nodecode-gateway.service >/dev/null 2>&1 || true
-  command -v keep-awake.sh >/dev/null 2>&1 && keep-awake.sh --force >/dev/null 2>&1 || true
+  KA="$(command -v keep-awake.sh || echo "$(dirname "$0")/keep-awake.sh")"; [ -x "$KA" ] && "$KA" --force >/dev/null 2>&1 || true
 }
 
 # (a) máy vừa ngủ?
@@ -57,7 +58,6 @@ if ! systemctl --user is-active --quiet nodecode-gateway.service; then
 fi
 
 # (c) giữ box: gọi keep-awake, nó tự bỏ qua khi còn hold đủ dài và tự backoff khi API hỏng
-if command -v keep-awake.sh >/dev/null 2>&1; then
-  keep-awake.sh >/dev/null 2>&1 || true
-fi
+KA="$(command -v keep-awake.sh || echo "$(dirname "$0")/keep-awake.sh")"
+[ -x "$KA" ] && "$KA" >/dev/null 2>&1 || true
 exit 0
