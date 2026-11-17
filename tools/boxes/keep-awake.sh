@@ -18,7 +18,7 @@
 # Mã thoát: 0 = đang có hold đủ dài hoặc vừa đặt được; 1 = không đặt được (lần sau timer thử lại).
 set -uo pipefail
 
-STATE="${HOME}/.nodecode/box-keepawake"
+STATE="${KEEPAWAKE_STATE:-${HOME}/.nodecode/box-keepawake}"
 mkdir -p "$STATE"
 LOG="$STATE/log"
 IDFILE="$STATE/thread-id"
@@ -47,7 +47,7 @@ esac
 exit 0
 STUB
   chmod +x "$tmp/dvb-onbox"
-  run() { STUBDIR="$tmp" PATH="$tmp:$PATH" bash "$0"; echo "rc=$?"; }
+  run() { STUBDIR="$tmp" KEEPAWAKE_STATE="$tmp/state" PATH="$tmp:$PATH" bash "$0"; echo "rc=$?"; }
   fut=$(python3 -c 'import datetime,time;print((datetime.datetime.now(datetime.UTC)+datetime.timedelta(hours=1)).isoformat().replace("+00:00","Z"))')
   printf '{"ok":true,"hold":{"endsAt":"%s"}}' "$fut" > "$tmp/get"; : > "$tmp/set"
   echo "-- hold còn 1 giờ: phải bỏ qua (rc=0, in 'hold còn')"
@@ -80,9 +80,15 @@ print(int(t - time.time()))
 '
 }
 
+FORCE=0; [ "${1:-}" = "--force" ] && FORCE=1
+# API hỏng thì giãn nhịp: 60s, 120s, ... tối đa 10 phút, để nhịp 30 giây của watchdog không đập liên tục
+NOW=$(date +%s)
+NEXT=$(cat "$STATE/next-try" 2>/dev/null || echo 0)
+if [ "$FORCE" = 0 ] && [ "$NOW" -lt "$NEXT" ]; then exit 0; fi
+
 current=$(dvb-onbox devboxes keep-awake get --json 2>/dev/null || true)
 left=$(printf '%s' "$current" | ends_in)
-if [ -n "$left" ] && [ "$left" -gt $((CADENCE * 2)) ]; then
+if [ "$FORCE" = 0 ] && [ -n "$left" ] && [ "$left" -gt $((CADENCE * 2)) ]; then
   echo "hold còn ${left}s, đủ dùng"
   exit 0
 fi
@@ -92,10 +98,15 @@ for try in 1 2 3; do
              --idempotency-key "$(cat /proc/sys/kernel/random/uuid)" --json 2>&1); then
     if printf '%s' "$out" | grep -q '"ok": true'; then
       say "đã giữ box ${FOR} (lần thử ${try})"
+      echo 0 > "$STATE/next-try"; echo 0 > "$STATE/fails"
       exit 0
     fi
   fi
   say "lần ${try} không đặt được: $(printf '%s' "$out" | tr '\n' ' ' | cut -c1-160)"
   [ "$try" -lt 3 ] && sleep $((try * 20))
 done
+f=$(( $(cat "$STATE/fails" 2>/dev/null || echo 0) + 1 )); echo "$f" > "$STATE/fails"
+wait=$(( 60 * (1 << (f > 4 ? 4 : f)) )); [ "$wait" -gt 600 ] && wait=10
+echo $(( $(date +%s) + wait )) > "$STATE/next-try"
+say "API chua dat duoc (${f} lan lien) - thu lai sau ${wait}s"
 exit 1

@@ -1,0 +1,11 @@
+[Unit]
+Description=Nhip canh box moi 30 giay
+
+[Timer]
+OnBootSec=20s
+OnUnitActiveSec=30s
+AccuracySec=5s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

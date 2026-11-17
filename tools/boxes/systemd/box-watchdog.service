@@ -1,0 +1,8 @@
+[Unit]
+Description=Canh box: dung lai OSA/gateway sau khi ngu, giu box khoi ngu tiep
+After=network-online.target
+
+[Service]
+Type=oneshot
+Environment=KEEPAWAKE_FOR=30m
+ExecStart=%h/.local/bin/box-watchdog.sh
