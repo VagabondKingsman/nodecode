@@ -28,6 +28,13 @@ check "restart osa.service" "restart OSA"
 check "restart nodecode-gateway.service" "restart gateway"
 check "keep-awake --force" "giữ box lại"
 
+echo "-- ngủ NGẮN 100 giây mà mọi thứ khoẻ: không được restart, chỉ giữ box"
+reset; mono=$(cut -d' ' -f1 /proc/uptime)
+python3 -c "print($mono - 1)" > "$tmp/state/mono"; echo $(( $(date +%s) - 100 )) > "$tmp/state/wall"
+STUB_GET='{"ok":true,"hold":null}' STUB_SET='{"ok": true}' STUBDIR="$tmp" WATCHDOG_STATE="$tmp/state" PATH="$tmp:$PATH" "$here/box-watchdog.sh" >/dev/null 2>&1
+grep -q "restart" "$tmp/calls" && echo "FAIL ngủ ngắn mà vẫn restart" && fail=1 || echo "ok   không restart sau ngủ ngắn"
+check "keep-awake --force" "vẫn giữ box lại"
+
 echo "-- không ngủ, OSA chết 2 nhịp liên tiếp: phải restart OSA, không restart gateway"
 reset; mono=$(cut -d' ' -f1 /proc/uptime)
 python3 -c "print($mono)" > "$tmp/state/mono"; date +%s > "$tmp/state/wall"
