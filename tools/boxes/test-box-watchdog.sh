@@ -20,19 +20,24 @@ fail=0
 check() { if grep -q "$1" "$tmp/calls" 2>/dev/null; then echo "ok   $2"; else echo "FAIL $2"; fail=1; fi; }
 reset() { : > "$tmp/calls"; rm -rf "$tmp/state"; mkdir -p "$tmp/state"; }
 
-echo "-- máy vừa ngủ 400 giây: phải restart cả hai và giữ box"
+echo "-- máy vừa ngủ 400 giây, mọi thứ khoẻ: chỉ giữ box, không restart"
 reset; mono=$(cut -d' ' -f1 /proc/uptime)
 python3 -c "print($mono - 1)" > "$tmp/state/mono"; echo $(( $(date +%s) - 400 )) > "$tmp/state/wall"
 STUBDIR="$tmp" WATCHDOG_STATE="$tmp/state" PATH="$tmp:$PATH" "$here/box-watchdog.sh" >/dev/null 2>&1
-check "restart osa.service" "restart OSA"
-check "restart nodecode-gateway.service" "restart gateway"
+grep -q "restart" "$tmp/calls" && echo "FAIL ngủ mà vẫn restart" && fail=1 || echo "ok   không restart sau khi ngủ"
+check "keep-awake --force" "giữ box lại"
+echo "-- vừa ngủ và OSA đã chết: phải dựng OSA, gateway sống thì để yên"
+reset; mono=$(cut -d' ' -f1 /proc/uptime)
+python3 -c "print($mono - 1)" > "$tmp/state/mono"; echo $(( $(date +%s) - 400 )) > "$tmp/state/wall"
+STUB_HEALTH=500 STUBDIR="$tmp" WATCHDOG_STATE="$tmp/state" PATH="$tmp:$PATH" "$here/box-watchdog.sh" >/dev/null 2>&1
+check "restart osa.service" "dựng OSA sau khi tỉnh mà OSA chết"
 check "keep-awake --force" "giữ box lại"
 
-echo "-- ngủ NGẮN 100 giây mà mọi thứ khoẻ: không được restart, chỉ giữ box"
+echo "-- ngủ mà mọi thứ khoẻ: KHÔNG được restart (chỉ giữ box)"
 reset; mono=$(cut -d' ' -f1 /proc/uptime)
 python3 -c "print($mono - 1)" > "$tmp/state/mono"; echo $(( $(date +%s) - 100 )) > "$tmp/state/wall"
 STUB_GET='{"ok":true,"hold":null}' STUB_SET='{"ok": true}' STUBDIR="$tmp" WATCHDOG_STATE="$tmp/state" PATH="$tmp:$PATH" "$here/box-watchdog.sh" >/dev/null 2>&1
-grep -q "restart" "$tmp/calls" && echo "FAIL ngủ ngắn mà vẫn restart" && fail=1 || echo "ok   không restart sau ngủ ngắn"
+grep -q "restart" "$tmp/calls" && echo "FAIL ngủ mà vẫn restart" && fail=1 || echo "ok   không restart sau khi ngủ"
 check "keep-awake --force" "vẫn giữ box lại"
 
 echo "-- không ngủ, OSA chết 2 nhịp liên tiếp: phải restart OSA, không restart gateway"
