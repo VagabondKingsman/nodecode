@@ -103,3 +103,28 @@ nodecode --version
 nodecode gateway status    # or confirm serve is listening
 pgrep -af 'nodecode serve'
 ```
+
+## Giữ box khỏi tự đi ngủ
+
+boxes.dev cho box ngủ khi không còn ai nhìn terminal (ví dụ điện thoại đã tắt app), và một task đang
+chạy sẽ đứng giữa chừng. Cách chặn là **giữ** box bằng API của chính boxes.dev, tự gia hạn:
+
+```sh
+cp tools/boxes/keep-awake.sh tools/boxes/resume-heal.sh ~/.local/bin/
+cp tools/boxes/systemd/box-keepawake.* tools/boxes/systemd/box-resume-heal.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now box-keepawake.timer box-resume-heal.service
+```
+
+- `box-keepawake.timer` chạy mỗi 10 phút: nếu chưa có hold đủ dài thì đặt hold 30 phút (`KEEPAWAKE_FOR`).
+  Một hold tối đa 4 giờ, nên phải gia hạn; timer có `Persistent=true` nên lần bị lỡ sẽ chạy bù sau khi tỉnh.
+- Cùng nhịp đó, `resume-heal.sh` kiểm OSA và gateway còn sống, hỏng thì dựng lại — để box tỉnh dậy là
+  mọi thứ chạy tiếp, không phải chờ ai bấm.
+- Cả hai unit dịch vụ đều `Restart=always` và `enabled` ở `default.target`: box bị *dừng* thì chúng tự lên lại.
+
+Kiểm: `dvb-onbox devboxes keep-awake get` (cần `BOXES_CLIENT_THREAD_ID`, script tự giữ một id trong
+`~/.nodecode/box-keepawake/thread-id`), log ở `~/.nodecode/box-keepawake/log`. Tắt hẳn:
+`systemctl --user disable --now box-keepawake.timer` rồi `dvb-onbox devboxes keep-awake cancel --id <id>`.
+
+Lưu ý: giữ box **tốn box-hours** theo cỡ máy; API có lúc trả `service_unavailable` (tạm thời) — script
+ghi log rồi thử lại ở nhịp sau, nên đừng coi một lần hỏng là đã tắt.

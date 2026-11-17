@@ -1,0 +1,8 @@
+[Unit]
+Description=Giữ box boxes.dev khỏi tự đi ngủ khi đang có task
+After=network-online.target
+
+[Service]
+Type=oneshot
+Environment=KEEPAWAKE_FOR=30m
+ExecStart=%h/.local/bin/resume-heal.sh
