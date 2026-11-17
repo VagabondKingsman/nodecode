@@ -32,6 +32,8 @@ FOR="${KEEPAWAKE_FOR:-30m}"
 CADENCE="${KEEPAWAKE_CADENCE_S:-600}"
 REASON="${KEEPAWAKE_REASON:-giữ box cho task đang chạy (nodecode/OSA)}"
 
+command -v dvb-onbox >/dev/null 2>&1 || { echo "keep-awake: không thấy dvb-onbox (PATH=$PATH)"; exit 1; }
+
 say() { printf '%s %s\n' "$(date -u +%FT%TZ)" "$*" | tee -a "$LOG" >&2; }
 
 if [ "${1:-}" = "--selftest" ]; then
