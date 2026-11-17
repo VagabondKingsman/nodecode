@@ -24,18 +24,30 @@ printf '%s\n' "$mono" > "$STATE/mono"; printf '%s\n' "$wall" > "$STATE/wall"
 
 # Sau một lần ngủ thì DỰNG LẠI CẢ HAI, không chỉ khi thấy chết: ngủ làm đứt mọi kết nối
 # (provider, WebSocket của điện thoại), tiến trình "vẫn sống" sau đó thường là nửa hỏng.
+# Ngủ NGẮN mà mọi thứ còn khoẻ thì KHÔNG restart: mỗi cú restart giết đúng lượt đang chạy, mà box đang
+# ngủ ngắn liên tục thì giết luôn mọi việc. Chỉ dựng lại khi ngủ dài hoặc có cái đã hỏng.
+SHORT_SLEEP="${WATCHDOG_SHORT_SLEEP_S:-180}"
+
+ka() { local k; k="$(command -v keep-awake.sh || echo "$(dirname "$0")/keep-awake.sh")"; [ -x "$k" ] && "$k" --force >/dev/null 2>&1 || true; }
+
 heal() {
   say "dựng lại: $1"
   systemctl --user restart osa.service >/dev/null 2>&1 || true
   systemctl --user restart nodecode-gateway.service >/dev/null 2>&1 || true
-  KA="$(command -v keep-awake.sh || echo "$(dirname "$0")/keep-awake.sh")"; [ -x "$KA" ] && "$KA" --force >/dev/null 2>&1 || true
+  ka
 }
 
 # (a) máy vừa ngủ?
 gap=$(python3 -c "print(int(($wall - $prev_wall) - ($mono - $prev_mono)))" 2>/dev/null || echo 0)
 if [ "${gap:-0}" -gt "$SLEEP_GAP" ]; then
   say "máy vừa ngủ ${gap}s"
-  heal "sau khi ngủ ${gap}s"
+  if [ "$gap" -le "$SHORT_SLEEP" ] && curl -fsS -m 5 -o /dev/null http://127.0.0.1:8765/manifest.json 2>/dev/null \
+     && systemctl --user is-active --quiet nodecode-gateway.service; then
+    say "ngủ ngắn, mọi thứ còn khoẻ — giữ nguyên tiến trình, chỉ giữ box"
+    ka
+  else
+    heal "sau khi ngủ ${gap}s"
+  fi
 fi
 
 # (b) OSA còn trả lời? đếm 2 nhịp liên tiếp mới dựng, đừng giật khi một lần chậm
