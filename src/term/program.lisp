@@ -367,8 +367,8 @@ The post is spawned with SB-THREAD, not through bordeaux-threads. bordeaux
 0.9.4 starts a thread by recording a wrapper for it under
 *KNOWN-THREADS-LOCK* and has the new thread look that record up; the new
 thread can get there first, and the BT-ERROR it then raises is signalled
-inside the very mutex RECORD-CONDITION re-grabs, so SBCL answers "Recursive
-lock attempt" and the thread dies with the message unposted — which froze a
+inside the very mutex RECORD-CONDITION re-grabs, so SBCL answers \"Recursive
+lock attempt\" and the thread dies with the message unposted — which froze a
 TUI for an hour. Going around bt2 costs only the inherited dynamic bindings,
 which a two-line relay does not want. What the body raises is still caught
 here, so a failure reports through the loop instead of ending the thread."
