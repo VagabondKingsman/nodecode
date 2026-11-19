@@ -1,0 +1,10 @@
+[Unit]
+Description=Sau khi box tinh day: dung lai OSA/gateway neu hong, giu box
+After=suspend.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/resume-heal.sh
+
+[Install]
+WantedBy=suspend.target default.target
