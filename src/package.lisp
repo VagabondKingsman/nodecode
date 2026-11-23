@@ -252,7 +252,7 @@ renderer, the program loop.")
    #:active-turn-starts #:any-active-turn-p #:retained-history-floor #:retained-history-floors
    #:session-prompt-facts
    #:advance-history-floor #:complete-turn #:record-assistant-message
-   #:record-exchange-turn #:turn-origin #:fail-turn #:request-cancel-turn
+   #:record-exchange-turn #:turn-origin #:fail-turn #:condition-frames #:request-cancel-turn
    ;; TURN-CANCELLED-CONDITION, with its readers, is exported by DEFINE-ERROR
    ;; at its declaration.
    #:turn-assistant-round-count
@@ -371,6 +371,7 @@ renderer, the program loop.")
    ;; --- workspace snapshots (snapshot.lisp) ---
    #:ensure-snapshot-store #:git-available-p #:capture-workspace-tree
    #:open-workspace-bracket #:close-workspace-bracket #:workspace-diff-document
+   #:bound-diff-document
    #:anchor-tree #:changed-paths #:restore-paths #:hash-in-tree #:repack-store
    #:record-workspace-capture #:checkpoint-capture-boundary
    #:close-detached-workspace-window #:turn-boundary-captured-p
