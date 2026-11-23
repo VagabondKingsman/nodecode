@@ -19,6 +19,8 @@ Bản sao lưu **đọc được bằng mắt** của con nodecode đang chạy 
 
 ## Dựng lại trên một máy khác
 
+Bản đầy đủ, từng bước (VPS mới, cài bản phát hành hay build từ fork, khôi phục home, cell, ký ức, gateway, kiểm tra): **`SETUP-FROM-THIS-FORK.md`** ở gốc repo. Dưới đây là bản tóm tắt.
+
 1. Cài nodecode đúng bản trong `version.txt` rồi đăng nhập.
 2. Cài lại các cell ở `cells.txt`: `nodecode add nc://<tên>` (bỏ qua `cursor-agent-memory`).
 3. Chép `memory/*.lisp` vào `~/.nodecode/cells/<tên-máy>-memory/` cùng `memory-cell.asd`; chỉ mục đọc tệp nên chúng vào chỉ mục ngay ở lượt sau.
