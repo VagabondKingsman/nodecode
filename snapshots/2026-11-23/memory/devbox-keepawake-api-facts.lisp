@@ -1,0 +1,4 @@
+;;; devbox-keepawake-api-facts — define-memory recorded by session experience-s-GKPN8NDI-turn-1U7TEKS-WSIIL82VJC, 2026-11-17T09:37:14Z
+(in-package :nodecode.evolved)
+
+(define-memory devbox-keepawake-api-facts "Trong dự án này lệnh giữ máy ảo khỏi ngủ là `dvb-onbox devboxes keep-awake` (mặc định 20 phút, trần 4 giờ) và nó đòi biến BOXES_CLIENT_THREAD_ID; khi backend boxes.dev hỏng thì hàm Convex threadKeepAwakeHolds trả 503 trong sprite-daemon.log, còn đường hẹn giờ threads schedule set cũng 503 theo. Gọi thử thẳng HTTP từ ngoài không tới được API thật: `https://boxes.dev/.sprite/api/self/keep-awake` trả 404/405 (hoặc HTML SPA) vì route chỉ có sau daemon; muốn loại trừ mạng thì cho bot chạy `getent hosts boxes.dev` + `curl -sS -o /dev/null -w '%{http_code} %{time_total}' https://boxes.dev/` từ trong máy ảo — 200 trong ~0,1 giây nghĩa là DNS/TLS/đường ra đều tốt và lỗi nằm phía server." :type :project)

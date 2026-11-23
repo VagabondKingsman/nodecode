@@ -1,0 +1,10 @@
+;;; tailscale-userspace-login — define-skill recorded by session experience-s-1CKKCZWG-turn-1U7HNN7-BX5FFDJ8DA, 2026-11-11T01:23:16Z
+(in-package :nodecode.evolved)
+
+(define-skill tailscale-userspace-login
+  "Đăng nhập tailscaled userspace (không root) khi máy chỉ có địa chỉ link-local 169.254.x: login treo NeedsLogin vì netmon tưởng offline."
+  ;; when-to-use: tailscaled --tun=userspace-networking đã chạy nhưng `tailscale up --authkey=...` trả "timeout waiting for Tailscale service to enter a Running state", state kẹt NeedsLogin, log có "control: setPaused(true) ... awaiting unpause" và "link state: ... v4=false v6=false"; điển hình trong sandbox/container chỉ có 169.254.x.
+  ;; evidence: 11/11/2026 OSA — log "link state: interfaces.State{defaultRoute=eth0 ... v4=false v6=false}" và mọi lần `up` đều timeout; sau khi chạy daemon với TS_ASSUME_NETWORK_UP_FOR_TEST=1, control plane trả lời ngay và hiện lỗi thật "backend error: invalid key: API key does not exist".
+  ;; confidence: high — đổi đúng một env, lỗi chuyển từ treo-vô-cớ sang lỗi cụ thể từ server.
+  ;; bước: 1) `ip -br addr` — chỉ 127.x + 169.254.x/fe80 thì đúng ca này. 2) restart tailscaled giữ nguyên --state/--socket, thêm env TS_ASSUME_NETWORK_UP_FOR_TEST=1. 3) `tailscale --socket=... up --authkey=... --hostname=... --accept-dns=false --timeout=45s`; "invalid key: API key does not exist" = key thiếu secret (đầy đủ là tskey-auth-<id>-<secret>). 4) khi Running: `tailscale status --json` → Self.TailscaleIPs và Self.DNSName để đưa URL http://<dns>:<port>. 5) muốn URL không kèm port và chỉ trong tailnet: `tailscale serve --bg --http=80 http://127.0.0.1:<port>` rồi `tailscale serve status` (dòng 'tailnet only' + 'proxy http://127.0.0.1:<port>'); giữ `tailscale funnel reset` để không công khai. 6) node userspace KHÔNG tự curl được IP tailnet của chính nó (trả 000) — verify từ một peer thật trong tailnet, `tailscale ping` chỉ chứng minh chiều ra và thấy 'via DERP(xxx)' nghĩa là không có direct. TỪ 11/11/2026 daemon chạy TUN (không còn userspace): node TỰ curl được IP 100.x của chính nó; xem memory osa-tailnet và skill tailscale-direct-diagnosis.
+)

@@ -1,0 +1,16 @@
+;;; upstream-build-switch — define-skill recorded 2026-11-18
+(in-package :nodecode.evolved)
+
+(define-skill upstream-build-switch
+  "Move this box's running Nodecode onto the upstream repo (nodecode-ai/nodecode) built from source, keeping the fork checkout and the way back."
+  ;; Verified 2026-11-18 on /home/boxes: upstream main = 60db5cd; the box had been running the fork build 1e13d1d (VagabondKingsman/nodecode).
+  ;; Build the way upstream's README says (Build from source): git clone --branch main https://github.com/nodecode-ai/nodecode.git DIR, then `just release` in DIR (it runs cells-pull first, then dumps ./nodecode). SBCL 2.6.0 and quicklisp are already here via ~/.sbclrc; ~5 min, ends "warm: published <hash>" after "just release complete: ./nodecode".
+  ;; Install beside the running build, never over it: mkdir ~/.local/share/nodecode/<short-hash>, copy nodecode + src (chmod 700 the binary), then ln -sfn <short-hash> ~/.local/share/nodecode/current. The unit runs "current/nodecode gateway run", so a restart loads the new one; /proc/<pid>/exe shows a warm-cache copy of it, not the install path.
+  ;; Smoke before switching: NODECODE_HOME=~/.nodecode ./nodecode serve --store /tmp/x.db picks its own port and prints "gateway ready" and the cells it loaded; kill it by pid (pkill -f on a pattern that appears in your own command line kills your own shell - exit 143).
+  ;; The trap: ~/.nodecode/cells holds shipped cells as SYMLINKS into the checkout they came from (/home/boxes/nodecode/cells/...), so a new build would run the fork's cell code. Re-point each to the new clone: readlink, swap the prefix, ln -sfn; keep the old->new map (a copy lives at ~/.nodecode/cell-repoint-2026-11-18.map) because rollback means restoring it.
+  ;; 2026-11-18 later the same day: box/free-lane in /home/boxes/nodecode-upstream is upstream 60db5cd plus the four free-lane commits (4922bfa, dc6ffd1, 3b14001, 6484256), built with just release and installed as ~/.local/share/nodecode/6484256 - the running build. Plain upstream cannot run this home on a free key at all: any tool a cell adds makes every free turn answer 403 (see free-key-rejects-cell-tools).
+  ;; What upstream does NOT have: the free-lane patch (fold one prompt, read the fenced call) - and on 2026-11-19 that turned out to be a feature: the operator reported that with the patch in place a nodecode-free (Cyber v1 free) turn failed, and stock upstream 60db5cd91 answered `nodecode-free/nodecode-cyber-v1` with PONG-FREE under 31 loaded cells. The 403 free_needs_nodecode earlier recorded here belongs to a cell-provided tool being sent to the free key, not to the lane being absent; do not add the patch back to fix a free-key turn.
+  ;; Rollback: ln -sfn 1e13d1d ~/.local/share/nodecode/current, restore the symlinks from the map, systemctl --user restart nodecode-gateway.service.
+  ;; Also: a layer file naming a function this build lacks keeps the boot warning alive - "this build did not load 1 layer file: cursor-agent/probe-free-parse.lisp (names free-lane-answer)" went away with that file deleted.
+  ;; confidence: high - every step above ran here; versions, the 403 and the gateway pid/exe are this session's own output.
+  )

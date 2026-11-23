@@ -1,0 +1,6 @@
+;;; osa-signin-captcha-datacenter — define-skill recorded by session s-ZEJ9UW9D, 2026-11-20T09:53:27Z
+(in-package :nodecode.evolved)
+
+(define-skill osa-signin-captcha-datacenter
+  "20/11/2026: đăng nhập `nph110493@gmail.com` trên máy 5558 bị **reCAPTCHA** chặn ngay sau bước email (`Confirm you're not a robot`), 2 lần liền; tap checkbox (102,741) không qua, 'TRY ANOTHER WAY' → 'Couldn't sign you in — Google couldn't verify this account belongs to you'. Nguyên nhân: IP máy là **datacenter AWS Oregon** (mọi account trước vào được vì không bị thử thách). Cách xử: (a) người dùng tự bấm captcha trên màn hình máy ảo (mở qua OSA computer view) — nếu hiện ảnh thì giải tay; (b) cấp proxy residential cho máy ảo rồi đăng nhập lại; (c) dùng account khác.
+;; 21/11/2026 (osa-phone17, IP Cloudflare WARP chứ không phải AWS): captcha vẫn hiện với hoaithanhtran2023@gmail.com trên 2 IP WARP khác nhau (104.28.233.155, 104.28.201.159) và 'TRY ANOTHER WAY' → 'Couldn’t sign you in — Google couldn’t verify this account belongs to you'; cùng máy, cùng IP, thuxuanchuthi@gmail.com đi thẳng tới trang mật khẩu rồi 2FA ⇒ thử thách phụ thuộc ACCOUNT, đổi IP một mình không đủ; thử account khác trước khi đổ lỗi cho IP. Trước khi thử lại, máy đang sạch: serial 2f6b8d95, android_id 9d1a4f7c3b8e2065, 0 account, Magisk + 4 module + frida-server chạy.")

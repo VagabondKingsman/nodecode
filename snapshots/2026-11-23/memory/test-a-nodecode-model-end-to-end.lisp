@@ -1,0 +1,6 @@
+;;; test-a-nodecode-model-end-to-end — define-memory recorded by session s-CC94P7FJ, 2026-11-17T20:10:01Z
+(in-package :nodecode.evolved)
+
+(define-memory test-a-nodecode-model-end-to-end
+  "Prove a Nodecode provider/model wiring end-to-end without opening a TUI by hand: `cd /home/boxes && timeout 120 script -qec \"nodecode --model PROVIDER/MODEL -- 'Reply with exactly: PONG-X'\" /dev/null < /dev/null`, then strip escape codes (sed 's/\\x1b\\[[0-9;?]*[a-zA-Z]//g') and grep for the token or 'turn failed'. The CLI keeps its TUI open after the answer, so `timeout` is what ends it: run one at a time, and expect a nodecode process to outlive the script for a few seconds. --model is [PROVIDER/]MODEL[:EFFORT] and a provider name may contain '-' but the model itself may contain '/' (opencodex/google-antigravity/gemini-4-carbon resolves correctly to provider opencodex). nodecode refuses to start without a controlling tty ('nodecode needs a terminal'), which is what script -qec supplies. Observed 2026-11-17: experientiallabs/deepseek-v4.1-flash-1017 answered PONG-DEFAULT, while opencodex/google-antigravity/gemini-4-carbon surfaced the real upstream error in the UI as 'provider request failed [...] with status 401: Not logged in to google-antigravity' — so a failure here is the provider's, not the wiring's."
+  :type :reference)

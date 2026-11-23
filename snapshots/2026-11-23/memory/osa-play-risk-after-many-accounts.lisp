@@ -1,0 +1,5 @@
+;;; osa-play-risk-after-many-accounts — define-skill recorded by session s-ZEJ9UW9D, 2026-11-20T14:50:00Z
+(in-package :nodecode.evolved)
+
+(define-skill osa-play-risk-after-many-accounts
+  "20/11/2026 chiều — sau ~8 tài khoản/1 ngày trên cùng máy ảo, các tài khoản MỚI bắt đầu bị Play trả 'Something went wrong on our end' ngay khi mở tờ thanh toán (freemanx0101, thuxuanchuthi), dù: đã reset serial+Android ID, pm clear, tài khoản US, thẻ hợp lệ, frida chạy root. Trước đó (nhunhiendo, kimhongkim2211) mua được 27 tháng trên cùng máy. ⇒ Đây là **risk control theo device/quá nhiều account trong ngày**, không phải lỗi tool. Cách xử: (a) đ�i vài giờ–1 ngày rồi thử lại; (b) đổi hẳn danh tính máy mạnh hơn (đổi cả fingerprint/model, không chỉ serial+AndroidID); (c) dùng container/image khác hoặc máy thật. LƯU Ý KỸ THUẬT vừa vá trong tool: `bat_frida()` phải `adb root` trước và kiểm frida-server chạy bằng user **root** — nếu chạy bằng shell thì attach lỗi `frida.PermissionDeniedError: unable to access process with pid`. Sau restart container, adbd về shell nên phải root lại.")
