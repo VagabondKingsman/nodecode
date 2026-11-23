@@ -16,6 +16,12 @@
   ;; with key/token/secret values masked but paths kept; version.txt; taken-at.txt;
   ;; manifest.md with counts and the source commit; README.md in Vietnamese.
   ;;
+  ;; Refreshing a snapshot already on main (2026-11-23: five memories defined after the cut, one
+  ;; edited): copy every .lisp of the knowledge cells over snapshots/DATE/memory/ again, recount
+  ;; there -- n=$(ls *.lisp | wc -l), k=$(grep -l define-skill *.lisp | wc -l), memories=n-k -- and
+  ;; write those three numbers into manifest.md's 'ký ức + skill' line plus a '- cập nhật lần cuối'
+  ;; line, then commit and push main. Do the recount from the copied tree, not the home, or the
+  ;; manifest and the folder drift apart.
   ;; What stays behind, on purpose: auth.json, secrets/, gh-token, operator-token,
   ;; history.db, binary snapshots, generations, chrome-profile, and hub cell sources
   ;; (cells.txt reinstalls those). Nothing here is secret, which is the whole point:
