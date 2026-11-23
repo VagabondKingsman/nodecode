@@ -1,0 +1,9 @@
+;;; osa-trial-tool-repo-diff — define-skill recorded by session s-ZEJ9UW9D, 2026-11-19T12:24:21Z
+(in-package :nodecode.evolved)
+
+(define-skill osa-trial-tool-repo-diff
+    "Repo duwqijlk/google-trial-tool (19/11/2026) so với flow của mình: cùng kỹ thuật frida+DexClassLoader+BillingClient, nhưng query 7 product và có thêm MỘT product mình chưa dùng: **`g1.play.2tb.ai`** (README gọi là `pro`) — probe thật trên osa-phone xác nhận nó có **offer `eft-3mo`: Free $0 P3M rồi $19.99/tháng**. Các product còn lại: `g1.2tb.ai.subs_variant` có 12months-eft/6months-eft/6months-eft-2/6months-eft-ss-2026; Ultra `g1.play.20tb`, `g1.play.ai.pro`, `g1.ai.pro`, `g1.30tb` **chỉ có base plan, KHÔNG còn trial** (khớp ghi chú của repo 'Ultra trials removed 2026-11-19' và khớp deep test của mình). Repo tự cảnh báo 'sẽ bị ban acc' và 'launchBillingFlow code=0 có thể tiêu mất quyền trial'. Điều kiện claim eft-3mo: account không có subscription đang chạy + có payment method; hiện phungthituyetbich đã Canceled (ends 18/11/2028) và không còn thẻ, helenchapa0222 đã bị xóa ⇒ cần account mới + thẻ. Công cụ probe: /tmp/gu/pro2028/probe7.js + probe_all.py; launch thử: launch_pro3mo.js (gen bằng gen_pro3.py).
+;; when: trên osa-phone, sau khi container vừa restart hoặc probe frida báo lỗi kết nối
+;; Sau `docker restart osa-phone` frida-server KHÔNG tự lên lại: chạy `adb root` rồi `adb shell nohup /data/local/tmp/frida-server -D`, đợi ~4s, kiểm `adb shell ps -A | grep frida-server` rồi mới chạy probe.
+;; evidence: trong lượt 19/11 12:2x, probe_all.py chết với `frida.ServerNotRunningError: unable to connect to remote frida-server: closed` ngay sau khi container restart; khởi động lại frida-server thì probe7.js chạy và trả đủ 7 product.
+;; confidence: high — lỗi và cách khắc phục đều thấy trực tiếp trong output.")

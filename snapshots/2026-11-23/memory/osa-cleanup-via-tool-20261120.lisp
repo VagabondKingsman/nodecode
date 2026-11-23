@@ -1,0 +1,5 @@
+;;; osa-cleanup-via-tool-20261120 — define-skill recorded by session experience-s-ZEJ9UW9D-turn-1U7Z9DV-V0NHAUDCUP, 2026-11-20T13:32:29Z
+(in-package :nodecode.evolved)
+
+(define-skill osa-cleanup-via-tool-20261120
+  "Dọn máy bằng bộ tool (20/11/2026) — khi chuẩn bị chạy account Google mới trên osa-phone13m/5558: `chay.sh dang-xuat` (chạy đồng bộ được, ~30s, in 'Số tài khoản còn lại: 0'); rồi `chay.sh nen lam-moi-may` (quá 120s của API exec nên PHẢI dùng nen) — tool tự pm clear stack Google, đổi serial, đặt Android ID, restart container, bật lại frida. ;; ĐỌC LẠI sau restart: `adb -s 127.0.0.1:5558 shell settings get secure android_id` + `getprop ro.serialno` + `dumpsys account | grep -c 'Account {'` rồi `chay.sh kiem-tra` (phải 7 ✅). ;; ĐÃ VÁ (20/11/2026): pro.py sinh serial/Android ID bằng `random.getrandbits(32/64)` thay vì timestamp — không còn chuỗi nhiều số 0 đầu; không cần đặt tay nữa (kết quả thật: serial fd65c5a4, Android ID 011f41f96b0d9fc7). ;; Kiểm chứng 20/11: sau dọn máy có serial 6b004b25, Android ID đặt tay 7c4a9e2b15d8306f, 0 account, Magisk 30.6 + frida chạy, kiem-tra 7 ✅.")

@@ -1,0 +1,70 @@
+{
+  "providers": {
+    "nodecode": {
+      "sdk": "openai-completions",
+      "base_url": "https://api.nodecode.ai/v1"
+    },
+    "nodecode-free": {
+      "sdk": "openai-completions",
+      "base_url": "https://api.nodecode.ai/v1"
+    },
+    "experientiallabs": {
+      "sdk": "openai-completions",
+      "base_url": "https://api.experientiallabs.ai/v1"
+    },
+    "opencodex": {
+      "sdk": "openai-completions",
+      "base_url": "http://100.112.118.106:10100/v1"
+    }
+  },
+  "failover": {
+    "chain": [
+      { "provider": "experientiallabs", "model": "deepseek-v4.1-flash-1017" },
+      { "provider": "experientiallabs", "model": "deepseek-v4-flash" }
+    ],
+    "on": ["rate_limit", "outage", "slow_start"],
+    "first_token_seconds": 45
+  },
+  "general": {
+    "default_model": {
+      "provider": "nodecode-free",
+      "model": "nodecode-cyber-v1",
+      "effort": "high"
+    },
+    "auxiliary_model": {
+      "provider": "experientiallabs",
+      "model": "deepseek-v4.1-flash-uncensored",
+      "effort": "high"
+    }
+  },
+  "prs": {
+    "token_file": "/home/boxes/.nodecode/gh-token"
+  },
+  "qa": {
+    "share": "weekly"
+  },
+  "channels": {
+    "discord": {
+      "enabled": false
+    },
+    "slack": {
+      "enabled": false
+    },
+    "telegram": {
+      "enabled": false
+    }
+  },
+  "telemetry": {
+    "mode": "observe",
+    "daily_usd": "5",
+    "monthly_usd": "100"
+  },
+  "update": {
+    "mode": "off",
+    "channel": "nightly"
+  },
+  "rea": {
+    "server": "rea-agents@6.7.0",
+    "pwntools-python": "/home/boxes/.local/venvs/rea/bin/python"
+  }
+}

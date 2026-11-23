@@ -1,0 +1,5 @@
+;;; osa-token-catalog-offers — define-skill recorded by session experience-s-ZEJ9UW9D-turn-1U7ZJYV-LGOHPHD9XZ, 2026-11-20T17:17:32Z
+(in-package :nodecode.evolved)
+
+(define-skill osa-token-catalog-offers
+  "20/11/2026 — BẢNG TOKEN TĨNH đã được ĐƯA RA KHỎI flow (operator yêu cầu quay về flow gốc 27 tháng): `offer-tokens.json` (7 token eft-15/12/6/4/3/2/1months trên g1.2tb.ai) đã bị XOÁ khỏi gói, lệnh `danh-sach-offer` đã bỏ, và `OLD_TOKEN` mặc định trong `js/mau_stack.js` đã đặt về \"\". Điều còn lại: `mua-token --token <thô> --san-pham <id>` (tuỳ chọn) để mua bằng token tự nhập. BÀI HỌC GIỮ LẠI: offerToken do Play server ký, gắn với (account + product + offer + phiên); token của account/phiên khác → Play trả 'Subscription not available' (đã thử cả g1.2tb.ai và g1.2tb.ai.subs_variant). Vì vậy flow chuẩn phải lấy token SỐNG qua BillingClient (`setOfferToken(offer.getOfferToken())`) và token cũ cho bước stack đọc từ `library.db` + `library.db-wal` (bảng ownership → inapp_purchase_data.purchaseToken)." )
