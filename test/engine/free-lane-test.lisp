@@ -129,7 +129,7 @@
     (is (equal "eval" (nlk:json-value call :string "function" "name")))
     (is (search "echo hi" (nlk:json-value call :string "function" "arguments")))))
 
-(deftest a-marker-alone-is-no-answer-on-any-lane
+(deftest a-marker-alone-is-no-answer-on-any-lane ()
   (is (nle::free-lane-marker-only-p "```tool"))
   (is (nle::free-lane-marker-only-p "  ```json  "))
   (is (not (nle::free-lane-marker-only-p "```tool\n(sh \"x\")\n```")))

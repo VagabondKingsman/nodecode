@@ -282,6 +282,55 @@ it, so the form is the argument it meant."
                (char= (char text (1- (length text))) #\)))
       (cons "eval" (encode-json-object (json-object "form" text))))))
 
+;;; --- one layer of escaping left on a form -------------------------------
+;;;
+;;; A model can escape a form twice, or write a patched newline where it meant
+;;; a newline: the JSON body then decodes to a form that still holds \" or \n,
+;;; and neither READ-FROM-STRING nor the tool call it becomes ever reads it.
+;;; Measured 2026-11-18 over 39 calls replayed from history.db: 18 forms did
+;;; not read, and 15 of them read after exactly one unescape, so the repair is
+;;; one pass, attempted only when the form as it stands does not read.
+
+(defun free-lane-reads-as-lisp-p (text)
+  "Whether TEXT reads as one Lisp form."
+  (and (stringp text)
+       (plusp (length (string-trim '(#\Space #\Tab #\Newline #\Return) text)))
+       (handler-case (progn (read-from-string text) t)
+         (error () nil))))
+
+(defun free-lane-unescape-once (text)
+  "TEXT with one layer of JSON escaping removed from it."
+  (with-output-to-string (out)
+    (loop with n = (length text)
+          for i from 0 below n
+          for ch = (char text i)
+          do (if (and (char= ch #\\) (< (1+ i) n))
+                 (let ((next (char text (1+ i))))
+                   (case next
+                     (#\" (write-char #\" out) (incf i))
+                     (#\\ (write-char #\\ out) (incf i))
+                     (#\n (write-char #\Newline out) (incf i))
+                     (#\t (write-char #\Tab out) (incf i))
+                     (#\r (write-char #\Return out) (incf i))
+                     (t (write-char ch out))))
+                 (write-char ch out)))))
+
+(defun free-lane-repair-call (call)
+  "CALL with the form it carries unescaped once, when it did not read as it
+stands and reads after one unescape. Any other call comes back as it was."
+  (let* ((arguments (and call (cdr call)))
+         (json (and (stringp arguments) (ignore-errors (free-lane-decode-call arguments))))
+         (form (and (hash-table-p json) (json-value json :string "form"))))
+    (if (and (stringp form)
+             (plusp (length (string-trim '(#\Space #\Tab #\Newline #\Return) form)))
+             (not (free-lane-reads-as-lisp-p form)))
+        (let ((repaired (free-lane-unescape-once form)))
+          (if (free-lane-reads-as-lisp-p repaired)
+              (progn (setf (gethash "form" json) repaired)
+                     (cons (car call) (encode-json-object json)))
+              call))
+        call)))
+
 (defun free-lane-split-tool-text (text)
   "TEXT without its call blocks, and those blocks as (NAME . ARGUMENTS) calls,
 in the order they stood. A block that names no call stays the text it was."
@@ -299,7 +348,7 @@ in the order they stood. A block that names no call stays the text it was."
                (call (or (and json (free-lane-call-of json)) (free-lane-lisp-call body)
                 (free-lane-salvage-form body))))
           (cond (call
-                 (push call calls)
+                 (push (free-lane-repair-call call) calls)
                  (write-string text out :start cursor :end start))
                 (t (write-string text out :start cursor :end end)))
           (setf cursor end))))
