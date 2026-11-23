@@ -1,38 +1,63 @@
 #!/usr/bin/env python3
-"""free-route — the key a nodecode-free provider asks with, chosen per call.
+"""free-route — the key a free-lane provider asks with, chosen per call from a pool.
 
 nodecode runs this through providers.<id>.api_key = "!<this>" on EVERY
-credential resolution (sh -lc, 10 s bound, never memoized), so a flip here is
+credential resolution (sh -lc, 10 s bound, never memoized), so a pick here is
 live at the next model call with no restart and no lost context.
 
-usage: free-route a|b        print that account's key, else the other's
-       free-route status     the table, never a key
-       free-route down a 3600   mark A down for an hour
-       free-route up a          clear the mark
+The pool lives in ~/.nodecode/free-accounts.json (0600). Each account carries
+its key and, when the API said so, a down_until. What it has spent in the last
+24 hours is read from history.db -- the same numbers the API meters (input not
+read from cache, plus output), attributed to an account through
+free-route.log, which records which account served which provider id when.
+
+usage: free-route --rung N        the Nth account of the priority order (N>=1)
+       free-route a|b             rungs 1 and 2, for older configs
+       free-route status          the table: state, spent/24h, headroom
+       free-route add [ID]        a key on stdin, added as ID (or the next letter)
+       free-route rotate ID       a key on stdin, replacing ID's
+       free-route remove ID
+       free-route down ID SECONDS | up ID
+       free-route doctor          what is wrong with the pool or the wiring
+       free-route export PATH | import PATH [--yes]
 """
-import json, os, sys, time
+import json, os, re, shutil, sqlite3, sys, time, datetime
 
 HOME = os.path.expanduser("~/.nodecode")
 STORE = os.path.join(HOME, "free-accounts.json")
+LOG = os.path.join(HOME, "free-route.log")
+SPEND = os.path.join(HOME, "free-spend.json")
+DB = os.path.join(HOME, "history.db")
+DEFAULTS = {"soft_cap": 7000000, "retry_grace": 60, "min_switch_seconds": 120}
+# log lines written before the pool knew provider ids: the 2026-11-23 spellings
+ALIAS = {"a": "nodecode-free", "b": "nodecode-free-b"}
+# What free-rungs names each rung's provider id: rung 1 keeps the id /models badges FREE.
+DEFAULT_UNDER = {1: "nodecode-free", 2: "nodecode-free-2", 3: "nodecode-free-3",
+                 4: "nodecode-free-4", 5: "nodecode-free-5", 6: "nodecode-free-6",
+                 7: "nodecode-free-7", 8: "nodecode-free-8"}
 
+
+# --- store ------------------------------------------------------------------
 
 def load():
     with open(STORE) as fh:
-        return json.load(fh)
-
-
-LOG = os.path.join(HOME, "free-route.log")
-
-
-def log(asked_under, served):
-    """One line per resolution: which provider id asked, which account answered it."""
-    try:
-        if os.path.exists(LOG) and os.path.getsize(LOG) > 200000:
-            os.replace(LOG, LOG + ".1")
-        with open(LOG, "a") as fh:
-            fh.write("%.3f %s %s\n" % (time.time(), asked_under, served))
-    except OSError:
-        pass
+        data = json.load(fh)
+    if "accounts" not in data:                      # v1: {"a": {...}, "b": {...}}
+        accounts = []
+        for name in ("a", "b"):
+            entry = data.get(name)
+            if isinstance(entry, dict):
+                accounts.append({"id": name, "label": entry.get("label", ""),
+                                 "key": entry.get("key", ""),
+                                 "down_until": entry.get("down_until"),
+                                 "last_code": entry.get("last_code")})
+        data = {"version": 2, "policy": dict(DEFAULTS), "accounts": accounts,
+                "migrated_from": 1}
+        save(data)
+    data.setdefault("version", 2)
+    data.setdefault("policy", {}).update(
+        {k: data.get("policy", {}).get(k, v) for k, v in DEFAULTS.items()})
+    return data
 
 
 def save(data):
@@ -41,90 +66,379 @@ def save(data):
         json.dump(data, fh, indent=2)
 
 
+def account(data, name):
+    return next((a for a in data["accounts"] if a["id"] == name), None)
+
+
+def holds_key(entry):
+    return bool((entry or {}).get("key", "").strip())
+
+
 def usable(entry):
-    if not (entry or {}).get("key", "").strip():
+    if not holds_key(entry):
         return False
-    until = entry.get("down_until") or 0
     try:
-        return float(until) <= time.time()
+        return float(entry.get("down_until") or 0) <= time.time()
     except (TypeError, ValueError):
         return True
 
 
+# --- the log: which account served which provider id, when ------------------
+
+def log(asked_under, served, rung):
+    try:
+        if os.path.exists(LOG) and os.path.getsize(LOG) > 200000:
+            os.replace(LOG, LOG + ".1")
+        with open(LOG, "a") as fh:
+            fh.write("%.3f %s %s %s\n" % (time.time(), asked_under, served, rung))
+    except OSError:
+        pass
+
+
+def log_entries(provider=None):
+    out = []
+    try:
+        with open(LOG) as fh:
+            for line in fh:
+                parts = line.split()
+                if len(parts) >= 3 and (provider is None or parts[1] == provider):
+                    out.append((float(parts[0]), parts[1], parts[2],
+                                parts[3] if len(parts) > 3 else "1"))
+    except OSError:
+        pass
+    return out
+
+
+def served(provider, at_epoch):
+    best = None
+    for when, asked_under, name, _rung in log_entries(provider):
+        if when <= at_epoch + 1:
+            if best is None or when >= best[0]:
+                best = (when, name)
+    return best[1] if best else None
+
+
+# --- the meter, as the API counts it, per account ---------------------------
+
+def spends(max_age=30):
+    """{account: tokens} for the trailing 24 hours, cached for MAX-AGE seconds."""
+    try:
+        with open(SPEND) as fh:
+            cached = json.load(fh)
+        if time.time() - cached.get("computed_at", 0) < max_age:
+            return cached.get("spends", {})
+    except (OSError, ValueError):
+        cached = {}
+    since = time.time() - 86400
+    since_iso = datetime.datetime.fromtimestamp(since, datetime.timezone.utc)\
+        .strftime("%Y-%m-%dT%H:%M:%S")
+    out = {}
+    try:
+        con = sqlite3.connect("file:%s?mode=ro" % DB, uri=True)
+        rows = con.execute(
+            "select occurred_at, json_extract(payload,'$.provider'),"
+            " coalesce(json_extract(payload,'$.input-tokens'),0)"
+            "  + coalesce(json_extract(payload,'$.output-tokens'),0)"
+            " from events where kind='turn.usage' and occurred_at > ?",
+            (since_iso,)).fetchall()
+        con.close()
+    except sqlite3.Error:
+        rows = []
+    timeline = {}
+    for when, provider, _name, _rung in log_entries():
+        timeline.setdefault(ALIAS.get(provider, provider), []).append((when, _name))
+    for provider in timeline:
+        timeline[provider].sort()
+    for occurred_at, provider, tokens in rows:
+        try:
+            epoch = datetime.datetime.strptime(
+                occurred_at[:19], "%Y-%m-%dT%H:%M:%S").replace(
+                tzinfo=datetime.timezone.utc).timestamp()
+        except (TypeError, ValueError):
+            continue
+        marks = timeline.get(provider) or []
+        name = None
+        for when, candidate in marks:
+            if when <= epoch + 1:
+                name = candidate
+            else:
+                break
+        if name:
+            out[name] = out.get(name, 0) + int(tokens or 0)
+    payload = {"computed_at": time.time(), "spends": out}
+    try:
+        fd = os.open(SPEND, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as fh:
+            json.dump(payload, fh)
+    except OSError:
+        pass
+    return out
+
+
+# --- the choice -------------------------------------------------------------
+
+def order(data, rung=1):
+    """Accounts in the order RUNG should try them: headroom first, then least recently served."""
+    policy = data.get("policy") or {}
+    soft = float(policy.get("soft_cap", DEFAULTS["soft_cap"]))
+    grace = float(policy.get("retry_grace", DEFAULTS["retry_grace"]))
+    spent = spends()
+    now = time.time()
+    recent = {}
+    for when, _provider, name, _rung in log_entries():
+        if now - when <= grace:
+            recent[name] = recent.get(name, 0) + 1
+    last_served = {}
+    for when, _provider, name, _rung in log_entries():
+        last_served[name] = max(last_served.get(name, 0), when)
+
+    def rank(entry):
+        used = spent.get(entry["id"], 0)
+        return (0 if used < soft and usable(entry) else 1,   # within budget first
+                used,                                        # then less spent
+                last_served.get(entry["id"], 0))            # then longest idle
+
+    live = [a for a in data["accounts"] if usable(a)]
+    live.sort(key=rank)
+    if rung > 1 and grace:
+        # a later rung does not repeat an account that just served a call
+        fresh = [a for a in live if recent.get(a["id"], 0) < 2]
+        live = fresh or live
+    out = live
+    if rung > 1:
+        rest = [a for a in data["accounts"] if holds_key(a) and a not in live]
+        rest.sort(key=rank)
+        out = live + rest
+    if rung - 1 < len(out):
+        return out[rung - 1]
+    # past the end: the one that comes back first
+    down = [a for a in data["accounts"] if holds_key(a)]
+    down.sort(key=lambda a: float(a.get("down_until") or 0))
+    return down[0] if down else None
+
+
+def read_key():
+    value = sys.stdin.readline().strip()
+    if not value:
+        sys.stderr.write("free-route: no key on stdin\n")
+        sys.exit(2)
+    if not value.startswith("sk-nc-"):
+        sys.stderr.write("free-route: a nodecode key starts with sk-nc-, refusing\n")
+        sys.exit(2)
+    return value
+
+
+def next_id(data):
+    taken = {a["id"] for a in data["accounts"]}
+    for letter in "abcdefghijklmnopqrstuvwxyz":
+        if letter not in taken:
+            return letter
+    return "n%d" % (len(taken) + 1)
+
+
+# --- verbs ------------------------------------------------------------------
+
+def verb_status(data):
+    spent = spends(max_age=5)
+    policy = data.get("policy") or {}
+    soft = float(policy.get("soft_cap", DEFAULTS["soft_cap"]))
+    now = time.time()
+    print("%-4s %-8s %12s %7s  %s" % ("id", "state", "spent/24h", "of cap", "note"))
+    for entry in data["accounts"]:
+        used = spent.get(entry["id"], 0)
+        if not holds_key(entry):
+            state, note = "no key", entry.get("label", "")
+        elif usable(entry):
+            state = "ok"
+            note = entry.get("label", "")
+        else:
+            state = "out %dmin" % max(0, (float(entry["down_until"]) - now) // 60)
+            note = entry.get("last_code") or ""
+        print("%-4s %-8s %12s %6.0f%%  %s"
+              % (entry["id"], state, "{:,}".format(used), 100.0 * used / soft if soft else 0, note))
+    print("\nsoft cap %s tokens/24h · retry grace %ss · accounts %d"
+          % ("{:,}".format(int(soft)), policy.get("retry_grace"), len(data["accounts"])))
+
+
+def verb_doctor(data):
+    bad = 0
+    ids = [a["id"] for a in data["accounts"]]
+    keys = {}
+    for entry in data["accounts"]:
+        if holds_key(entry):
+            key = entry["key"].strip()
+            if len(key) != 49:
+                print("! %s: key is %d characters, a nodecode key is 49" % (entry["id"], len(key)))
+                bad += 1
+            if not key.startswith("sk-nc-"):
+                print("! %s: key does not start sk-nc-" % entry["id"])
+                bad += 1
+            if key in keys:
+                print("! %s and %s hold the same key" % (keys[key], entry["id"]))
+                bad += 1
+            keys[key] = entry["id"]
+        else:
+            print("- %s: no key yet" % entry["id"])
+    mode = oct(os.stat(STORE).st_mode & 0o777)
+    if mode != "0o600":
+        print("! %s is %s, should be 600" % (STORE, mode))
+        bad += 1
+    # config alignment: every wrapper the config names must exist and answer
+    config_path = os.path.join(HOME, "config.jsonc")
+    try:
+        text = open(config_path).read()
+        text = re.sub(r'(?m)^\s*//.*$', '', text)
+        config = json.loads(text)
+    except (OSError, ValueError) as e:
+        print("! config.jsonc does not parse: %s" % e)
+        return 1
+    wired = []
+    for name, entry in (config.get("providers") or {}).items():
+        value = (entry or {}).get("api_key") or ""
+        if isinstance(value, str) and value.startswith("!"):
+            path = value[1:]
+            wired.append(name)
+            if not os.path.exists(path):
+                print("! %s asks with %s, which does not exist" % (name, path))
+                bad += 1
+            elif not os.access(path, os.X_OK):
+                print("! %s asks with %s, which is not executable" % (name, path))
+                bad += 1
+    chain = [c.get("provider") for c in (config.get("failover") or {}).get("chain") or []]
+    for name in chain:
+        if name not in (config.get("providers") or {}):
+            print("! failover.chain names %s, which is not a provider" % name)
+            bad += 1
+    print("%d account(s), %d keyed, %d provider(s) on a command, chain: %s"
+          % (len(ids), len(keys), len(wired), " -> ".join(chain) or "none"))
+    print("pool: fine" if not bad else "pool: %d problem(s)" % bad)
+    return 0 if not bad else 1
+
+
 def main(argv):
     if not argv:
-        return "usage: free-route a|b|status|down NAME SECONDS|up NAME"
-    verb, own = argv[0], (argv[1] if len(argv) > 1 else None)
-    if verb in ("a", "b"):
-        data = load()
-        other = "b" if verb == "a" else "a"
-        for name in (verb, other):
-            if usable(data.get(name)):
-                log(verb, name)
-                print(data[name]["key"].strip())
-                return 0
-        # Both out: ask with the one that comes back first, so the call's own 429
-        # carries the reset time that FREe-WATCH learns from.
-        holders = [n for n in (verb, other) if (data.get(n) or {}).get("key", "").strip()]
-        if holders:
-            name = min(holders, key=lambda n: float((data.get(n) or {}).get("down_until") or 0))
-            sys.stderr.write("free-route: both accounts out; asking with %s, which returns first" % name)
-            log(verb, name)
-            print(data[name]["key"].strip())
-            return 0
-        sys.stderr.write("free-route: neither account holds a key")
-        return 1
-    if verb == "clear" and own:
-        data = load()
-        data.setdefault(own, {}).pop("key", None)
-        save(data)
-        sys.stderr.write("free-route: account %s holds no key now\n" % own)
+        sys.stderr.write(__doc__)
+        return 2
+    verb = argv[0]
+    data = load()
+
+    if verb in ("a", "b") or verb.startswith("--rung"):
+        rung = 1 if verb == "a" else 2 if verb == "b" else int(
+            argv[1] if len(argv) > 1 and not argv[1].startswith("--") else verb.split("=", 1)[1])
+        # the wrapper says which provider id is asking, so the log can attribute
+        # what the account spends back to it; older wrappers log "a"/"b", which
+        # ALIAS reads as the two ids they meant.
+        asked_under = (argv[argv.index("--as") + 1] if "--as" in argv
+                       else (ALIAS.get(verb) or DEFAULT_UNDER.get(rung) or ("rung%d" % rung)))
+        entry = order(data, rung)
+        if entry is None or not holds_key(entry):
+            sys.stderr.write("free-route: no account holds a key\n")
+            return 1
+        log(asked_under, entry["id"], rung)
+        print(entry["key"].strip())
         return 0
-    if verb == "set" and own:
-        # The key comes on stdin, never argv: `free-route set b` then paste it, so it
-        # touches neither ps nor the shell's history.
-        value = sys.stdin.readline().strip()
-        if not value:
-            sys.stderr.write("free-route: no key on stdin")
-            return 2
-        if not value.startswith("sk-nc-"):
-            sys.stderr.write("free-route: a nodecode key starts with sk-nc-, refusing this one")
-            return 2
-        data = load()
-        entry = data.setdefault(own, {})
-        entry["key"] = value
-        entry.pop("down_until", None)
-        entry.pop("last_code", None)
-        save(data)
-        sys.stderr.write("free-route: account %s holds a key of %d characters\n" % (own, len(value)))
-        return 0
+
     if verb == "status":
-        data, now = load(), time.time()
-        for name in ("a", "b"):
-            e = data.get(name) or {}
-            until = e.get("down_until") or 0
-            state = "ok" if usable(e) else (
-                "no key" if not (e.get("key") or "").strip()
-                else "down %ds" % int(float(until) - now))
-            print("%s  %s  %s" % (name, state, (e.get("label") or "")))
+        verb_status(data)
         return 0
-    if verb == "down" and own and len(argv) > 2:
-        data = load()
-        data.setdefault(own, {})["down_until"] = time.time() + float(argv[2])
+    if verb == "doctor":
+        return verb_doctor(data)
+    if verb == "add":
+        name = argv[1] if len(argv) > 1 else next_id(data)
+        key = read_key()
+        entry = account(data, name)
+        if entry is None:
+            entry = {"id": name, "label": "", "key": key}
+            data["accounts"].append(entry)
+        else:
+            entry["key"] = key
+            entry.pop("down_until", None)
+            entry.pop("last_code", None)
+        save(data)
+        sys.stderr.write("free-route: account %s holds a key of %d characters\n"
+                         % (name, len(key)))
+        return 0
+    if verb == "rotate":
+        if len(argv) < 2:
+            sys.stderr.write("free-route rotate ID\n")
+            return 2
+        name, key = argv[1], read_key()
+        entry = account(data, name)
+        if entry is None:
+            entry = {"id": name, "label": "", "key": key}
+            data["accounts"].append(entry)
+        else:
+            entry["key"] = key
+            entry.pop("down_until", None)
+            entry.pop("last_code", None)
+        save(data)
+        sys.stderr.write("free-route: account %s rotated\n" % name)
+        return 0
+    if verb in ("set", "clear") and len(argv) > 1:      # the 2026-11-23 spellings
+        name = argv[1]
+        if verb == "set":
+            key = read_key()
+            entry = account(data, name) or {"id": name, "label": ""}
+            entry["key"] = key
+            entry.pop("down_until", None)
+            if entry not in data["accounts"]:
+                data["accounts"].append(entry)
+            save(data)
+            sys.stderr.write("free-route: account %s holds a key of %d characters\n"
+                             % (name, len(key)))
+        else:
+            entry = account(data, name)
+            if entry:
+                entry.pop("key", None)
+                save(data)
+            sys.stderr.write("free-route: account %s holds no key now\n" % name)
+        return 0
+    if verb == "remove" and len(argv) > 1:
+        data["accounts"] = [a for a in data["accounts"] if a["id"] != argv[1]]
+        save(data)
+        print("removed %s" % argv[1])
+        return 0
+    if verb == "down" and len(argv) > 2:
+        entry = account(data, argv[1])
+        if entry is None:
+            sys.stderr.write("free-route: no account %s\n" % argv[1])
+            return 2
+        entry["down_until"] = time.time() + float(argv[2])
+        entry.setdefault("last_code", "manual")
         save(data)
         return 0
-    if verb == "up" and own:
-        data = load()
-        data.setdefault(own, {}).pop("down_until", None)
-        with open(STORE, "w") as fh:
-            json.dump(data, fh, indent=2)
+    if verb == "up" and len(argv) > 1:
+        entry = account(data, argv[1])
+        if entry:
+            entry.pop("down_until", None)
+            entry.pop("last_code", None)
+            save(data)
         return 0
-    return "usage: free-route a|b|status|down NAME SECONDS|up NAME"
+    if verb == "export" and len(argv) > 1:
+        fd = os.open(argv[1], os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as fh:
+            json.dump(data, fh, indent=2)
+        print("exported to %s (0600, holds keys)" % argv[1])
+        return 0
+    if verb == "import" and len(argv) > 1:
+        incoming = json.load(open(argv[1]))
+        if "--yes" not in argv:
+            print("would import %d account(s): %s — pass --yes"
+                  % (len(incoming.get("accounts", [])),
+                     ", ".join(a["id"] for a in incoming.get("accounts", []))))
+            return 0
+        shutil.copyfile(STORE, STORE + ".before-import")
+        incoming.setdefault("version", 2)
+        incoming.setdefault("policy", data.get("policy"))
+        save(incoming)
+        print("imported %d account(s)" % len(incoming["accounts"]))
+        return 0
+    sys.stderr.write(__doc__)
+    return 2
 
 
 if __name__ == "__main__":
-    result = main(sys.argv[1:])
-    if isinstance(result, str):
-        sys.stderr.write(result)
-        sys.exit(2)
-    sys.exit(result)
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except BrokenPipeError:
+        sys.exit(0)

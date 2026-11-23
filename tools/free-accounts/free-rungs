@@ -1,0 +1,107 @@
+#!/usr/bin/env python3
+"""free-rungs — make the config match the pool.
+
+For N rungs it writes ~/.nodecode/bin/free-route-K (a two-line sh wrapper that
+asks free-route for rung K under a known provider id) and rewrites config.jsonc
+so that: providers nodecode-free, nodecode-free-2 … -N each carry
+"api_key": "!…/free-route-K" and request_max_retries 0; failover.chain is
+rung 1 … rung N, then whatever non-free rungs the chain already had; and
+general.default_model stays on a free provider when it already was.
+
+Nothing restarts: the config is memoized on (path, size, mtime), so the next
+model call reads the new chain.
+
+usage: free-rungs [N]     (default 3; N is how many rungs the chain may try)
+       free-rungs --show  (print the block it would write)
+"""
+import json, os, re, shutil, sys, time
+
+HOME = os.path.expanduser("~/.nodecode")
+BIN = os.path.join(HOME, "bin")
+CONFIG = os.path.join(HOME, "config.jsonc")
+BASE = "https://api.nodecode.ai/v1"
+MODEL = "nodecode-cyber-v1"
+
+
+def provider_id(rung):
+    return "nodecode-free" if rung == 1 else "nodecode-free-%d" % rung
+
+
+def read_config():
+    text = open(CONFIG).read()
+    stripped = re.sub(r"(?m)^\s*//.*$", "", text)
+    return json.loads(stripped)
+
+
+def write_wrappers(n):
+    written = []
+    for rung in range(1, n + 1):
+        path = os.path.join(BIN, "free-route-%d" % rung)
+        with open(path, "w") as fh:
+            fh.write("#!/bin/sh\n"
+                     "exec %s/bin/free-route --rung %d --as %s\n"
+                     % (HOME, rung, provider_id(rung)))
+        os.chmod(path, 0o755)
+        written.append(path)
+    return written
+
+
+def apply(n, config):
+    providers = config.setdefault("providers", {})
+    for rung in range(1, n + 1):
+        name = provider_id(rung)
+        entry = providers.get(name) or {}
+        entry["sdk"] = entry.get("sdk", "openai-completions")
+        entry["base_url"] = entry.get("base_url", BASE)
+        entry["api_key"] = "!%s/bin/free-route-%d" % (HOME, rung)
+        entry["request_max_retries"] = 0     # a 429 falls through at once
+        providers[name] = entry
+    # drop free providers past N, so the chain never names one with no wrapper
+    for name in list(providers):
+        m = re.fullmatch(r"nodecode-free-(\d+)", name)
+        if m and int(m.group(1)) > n:
+            del providers[name]
+    failover = config.setdefault("failover", {})
+    old = failover.get("chain") or []
+    head = [{"provider": provider_id(r), "model": MODEL} for r in range(1, n + 1)]
+    tail = [c for c in old if not str(c.get("provider", "")).startswith("nodecode-free")]
+    failover["chain"] = head + tail
+    on = failover.get("on")
+    if isinstance(on, list) and "broken_answer" not in on:
+        on.append("broken_answer")
+    general = config.setdefault("general", {})
+    default = general.get("default_model") or {}
+    if str(default.get("provider", "")).startswith("nodecode-free"):
+        default["provider"] = provider_id(1)
+        default.setdefault("model", MODEL)
+        general["default_model"] = default
+    return config
+
+
+def main(argv):
+    show = "--show" in argv
+    n = int(next((a for a in argv if a.isdigit()), 3))
+    config = read_config()
+    before = json.dumps(config, sort_keys=True)
+    config = apply(n, config)
+    if show:
+        print(json.dumps(config.get("failover", {}), indent=2))
+        print("providers: %s" % ", ".join(config["providers"]))
+        return 0
+    changed = json.dumps(config, sort_keys=True) != before
+    written = write_wrappers(n)
+    if changed:
+        shutil.copyfile(CONFIG, CONFIG + ".before-rungs-" + time.strftime("%Y%m%d-%H%M"))
+        fd = os.open(CONFIG, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as fh:
+            json.dump(config, fh, indent=2)
+            fh.write("\n")
+    print("%d rung(s): %s" % (n, ", ".join(provider_id(r) for r in range(1, n + 1))))
+    print("wrappers: %s" % ", ".join(os.path.basename(p) for p in written))
+    print("config: %s" % ("rewritten (backup beside it)" if changed else "already matched"))
+    print("chain: %s" % " -> ".join(c["provider"] for c in config["failover"]["chain"]))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

@@ -1,106 +1,84 @@
-# Hai account nodecode.ai free trong một home: tự chuyển khi cạn hạn mức
+# Pool N account nodecode.ai free trong một home
 
-Dựng trên box `boxes`, 2026-11-23, cho bản `0.1.16+c78fef6`. Mục tiêu: account A và B, cùng free plan, cùng `nodecode-cyber-v1`; A cạn 10M token/24h thì lượt sau (và ngay trong lượt đang chạy) đi bằng B, **không mất context**, không phải đăng nhập lại.
+Dựng trên box `boxes`, 2026-11-23, cho bản `0.1.16+c78fef6`. Mục tiêu: N account cùng free plan, cùng `nodecode-cyber-v1`; một account cạn thì lượt sau (và ngay trong lượt đang chạy) đi bằng account khác, **không mất context**, không đăng nhập lại, và **chia đều** để không account nào chạm trần.
 
-Bản gốc của các script nằm trong repo này: `tools/free-accounts/` (bốn script + hai unit). Trên một máy mới, chép chúng vào `~/.nodecode/bin/` và `~/.config/systemd/user/` rồi `chmod 755`.
+Bản gốc của mọi script nằm ở `tools/free-accounts/` trong repo này. Chép vào `~/.nodecode/bin/` rồi `chmod 755`.
 
-## 1. Đã cài gì
+## 1. Có gì
 
-| Tệp | Việc nó làm |
+| Tệp | Việc |
 |---|---|
-| `~/.nodecode/free-accounts.json` (0600) | hai account: `a`, `b` — mỗi cái một `key`, và `down_until` khi bị đánh dấu nghỉ |
-| `~/.nodecode/bin/free-route` | chọn key: `a`/`b` (in key), `status`, `set b` (đọc key từ stdin), `clear b`, `down a 3600`, `up a` |
-| `~/.nodecode/bin/free-route-a`, `free-route-b` | hai vỏ 2 dòng, để `config.jsonc` gọi đúng account của provider id |
-| `~/.nodecode/bin/free-watch` | đọc `history.db`, thấy một account bị 429 thì đánh dấu nó nghỉ **đúng tới mốc reset API nói** |
-| `~/.nodecode/free-route.log` | mỗi lần chọn key một dòng: `epoch provider-id account` |
-| `free-watch.timer` (systemd user) | chạy `free-watch` mỗi 5 phút |
+| `~/.nodecode/free-accounts.json` (0600) | pool: mỗi account `{id, label, key, down_until, last_code, marked_at}` + `policy` |
+| `~/.nodecode/bin/free-route` | chọn key theo headroom; quản trị pool (`status`, `add`, `rotate`, `remove`, `down/up`, `doctor`, `export/import`) |
+| `~/.nodecode/bin/free-route-K` | wrapper 2 dòng cho răng K, do `free-rungs` sinh |
+| `~/.nodecode/bin/free-rungs` | sinh wrapper + sửa `config.jsonc` cho khớp số account |
+| `~/.nodecode/bin/free-watch` | đọc `history.db`, đánh dấu account nghỉ **đúng mốc reset API nói**, và `--recover` khi account sống lại |
+| `~/.nodecode/free-route.log` | mỗi lần cấp key một dòng: `epoch provider-id account rung` |
+| `~/.nodecode/free-spend.json` | cache 30 s số token đã tiêu trong 24h, mỗi account |
+| `free-watch.timer` (systemd user) | chạy watcher mỗi 5 phút |
 
-`config.jsonc` đã có:
+## 2. Cách chọn key (khác bản 1)
 
-```jsonc
-"providers": {
-  "nodecode-free": { "sdk": "openai-completions", "base_url": "https://api.nodecode.ai/v1",
-                     "api_key": "!/home/boxes/.nodecode/bin/free-route-a",
-                     "request_max_retries": 0 },     // 429 là rơi ngay, không chờ 4x60s
-  "nodecode-free-b": { "sdk": "openai-completions", "base_url": "https://api.nodecode.ai/v1",
-                       "api_key": "!/home/boxes/.nodecode/bin/free-route-b" }
-},
-"failover": {
-  "chain": [ { "provider": "nodecode-free",   "model": "nodecode-cyber-v1" },
-             { "provider": "nodecode-free-b", "model": "nodecode-cyber-v1" },
-             { "provider": "experientiallabs", "model": "deepseek-v4.1-flash-1017" } ],
-  "on": ["rate_limit", "outage", "slow_start", "broken_answer"]
-}
-```
+Mỗi lần resolve credential (tức mỗi lần gọi model), `free-route` xếp hạng lại:
 
-Vì sao chạy được: nodecode gọi `providers.<id>.api_key` dạng `!command` **mỗi lần resolve credential**, `sh -lc`, trần 10 s, không memoize (`provider.lisp:3893`). Nên đổi account là đổi một tệp — **không restart, không mất session**.
+1. **Còn headroom trước** — account đã tiêu dưới `soft_cap` (mặc định **7M** token/24h) đứng trước account đã vượt.
+2. Trong nhóm đó, **tiêu ít nhất trước** (đọc từ `history.db`: `input-tokens + output-tokens`, đúng công thức meter của API, quy về account qua `free-route.log`).
+3. Bằng nhau thì **lâu nhất chưa phục vụ** trước.
+4. Răng N>1 **bỏ qua account vừa phục vụ 2 lần trong 60 s** — để răng sau không lặp account vừa chết.
 
-## 2. Lấy free key của account B **mà không đăng nhập vào box này**
+Hệ quả: pool chạy *dưới* trần, các account trôi đều, và 429 chỉ còn là lưới an toàn. Đo thật ngày 23/11 (trước khi có chia đều): `a` tiêu 9.47M còn `b` 0.06M — cùng khối lượng đó chia đều thì mỗi cái ~5M, không một lần 429.
 
-Điều kiện chung cho cả ba đường: account B phải **đã top-up một lần ≥ $2** (tiền ở lại trong balance; chưa top-up thì key free trả `free_locked`).
+Không có mạng nào bị gọi: key free từ chối mọi client ngoài CLI (`403 free_needs_nodecode`), nên mọi con số đều suy từ store của chính organism.
 
-### Đường 1 — trang khoá (khuyến nghị, không đụng gì trên box)
-
-1. Mở trình duyệt bất kỳ (máy này hay máy khác), đăng nhập `nodecode.ai` **bằng account B**.
-2. `https://nodecode.ai/account/top-up` → nạp ≥ $2 (một lần duy nhất).
-3. `https://nodecode.ai/account/keys` → **New key** → tick **Free key** → Copy.
-4. Khoá có dạng `sk-nc-…`, 49 ký tự.
-
-Không cần `nodecode login` trên box — account A trong `~/.nodecode/auth.json` không bị chạm.
-
-### Đường 2 — login trong một home rác rồi bê key ra
-
-Nếu bạn thích luồng trình duyệt của `login` hơn là trang khoá:
+## 3. Lệnh
 
 ```sh
-export NODECODE_HOME=/tmp/nb-free
-/home/boxes/.local/bin/nodecode login          # đăng nhập bằng account B, bấm Allow with a free key
-python3 -c "import json;print(json.load(open('/tmp/nb-free/auth.json'))['api_keys']['nodecode-free']['key'])" > /tmp/b.key
-rm -rf /tmp/nb-free                            # home rác xoá luôn, key đã nằm ở /tmp/b.key
+B=~/.nodecode/bin
+$B/free-route status            # bảng: state, spent/24h, %cap, ghi chú
+$B/free-route add c < /tmp/c.key   # thêm account (key đi qua stdin)
+$B/free-route rotate c < /tmp/c.key
+$B/free-route remove c
+$B/free-route down b 3600       # nghỉ 1 giờ (thủ công)
+$B/free-route up b
+$B/free-route doctor            # key sai độ dài/trùng, quyền file, wrapper, chain
+$B/free-route export ~/pool.json    # 0600, bê pool sang máy khác
+$B/free-route import ~/pool.json --yes
+$B/free-rungs 3                 # 3 răng: provider + wrapper + chain, có backup config
 ```
 
-Home thật không bị đụng vì `NODECODE_HOME` chỉ vào `/tmp/nb-free`. Nhớ `unset NODECODE_HOME` sau đó.
+`free-rungs N` sinh `nodecode-free`, `nodecode-free-2` … `nodecode-free-N`, mỗi cái `"api_key": "!…/free-route-K"` và `request_max_retries: 0` (429 là rơi ngay, không chờ 4×60 s), rồi đặt `failover.chain` = răng 1…N + các provider không-free đang có. Config memoize theo mtime nên **không restart**.
 
-### Đường 3 — account B đã dùng trên máy khác
+## 4. Lấy key của account mới **mà không đăng nhập vào box**
 
-Trên máy đó: `https://nodecode.ai/account/keys` → tạo **Free key** cho account B → copy. `machine link` không cần: nó nối máy vào account, đúng cái ta muốn tránh.
+Điều kiện: account đó đã **top-up một lần ≥ $2** (tiền ở lại balance).
 
-## 3. Đưa key B vào
+- **Trang khoá (khuyến nghị):** đăng nhập `nodecode.ai` bằng account đó → `https://nodecode.ai/account/top-up` nạp ≥ $2 → `https://nodecode.ai/account/keys` → **New key** → tick **Free key** → copy `sk-nc-…` (49 ký tự).
+- **Home rác:** `NODECODE_HOME=/tmp/nb nodecode login` (bấm Allow with a free key) rồi lấy `api_keys["nodecode-free"].key` trong `/tmp/nb/auth.json`, xoá `/tmp/nb`. Không đụng home thật.
+
+## 5. Khi một account cạn
+
+- **Trong lượt đang chạy:** `429 free_daily_used` → `failover.on` có `rate_limit` → cùng lượt đi tiếp bằng răng sau, context nguyên.
+- **Các lượt sau:** `free-watch` lấy `status`, `code` và câu `(at … UTC)` từ `history.db`, ghép `free-route.log` để biết **account nào**, ghi `down_until` = đúng mốc đó. Router bỏ account ấy ra; hết mốc tự trở lại (`usable()`).
+- `free-watch --recover` xoá dấu sớm khi account đó đã trả lời sau lúc bị đánh dấu.
+
+## 6. Quy định của nodecode.ai (đọc từ `nodecode.ai/terms`)
+
+- *"An account is meant for one person. If you are a router/reseller, please contact us…"* — **không cấm** một người giữ nhiều account; cái họ muốn là biết trước. Pool nhỏ cho cá nhân: gửi một mail `hi@nodecode.ai` là rẻ nhất và an toàn nhất.
+- *"We may stop any account that breaks our terms, or terminate…"*, balance **không** chuyển được giữa account, **không** hoàn tiền.
+- Hạn mức tính **theo account**, nên **nhiều key trên cùng account không nhân hạn mức** — phải nhiều account.
+- Dấu vết server thấy: `User-Agent` (`nodecode_cli/<build> (<os>; <arch>) <TERM>` — hai account cùng box giống hệt), IP, thời điểm, và **cùng một đoạn hội thoại đến từ hai key**.
+- Vì vậy: ưu tiên đổi account ở **ranh giới lượt**, giữ mỗi account dưới soft cap để không chạm trần mỗi ngày, tạo account tách bạch (email/ngày/IP), và khai báo nếu pool lớn.
+
+## 7. Nên có bao nhiêu account
+
+Meter tính `input không-cache + output`. 8 ngày qua trên box này: trung bình **21.7M/ngày = 2.2 acc-days**, ngày nặng nhất **69.4M = 6.9 acc-days**. Với soft cap 7M và chia đều: **3–4 account** đủ cho ngày thường và burst; **7** thì không bao giờ chạm trần, kể cả ngày xấu nhất.
+
+## 8. Kiểm tra sau khi thêm account
 
 ```sh
-/home/boxes/.nodecode/bin/free-route set b      # rồi dán key, Enter
-/home/boxes/.nodecode/bin/free-route status
+~/.nodecode/bin/free-route status
+~/.nodecode/bin/free-route doctor
+nodecode --model nodecode-free-3/nodecode-cyber-v1 -- 'Reply with exactly: PONG'
 ```
 
-Key đi qua **stdin**, không vào argv, không vào history của shell. Kiểm chứng thật (một lượt rẻ):
-
-```sh
-nodecode --model nodecode-free-b/nodecode-cyber-v1 -- 'Reply with exactly: PONG-B'
-```
-
-Thấy `PONG-B` và footer `nodecode-free-b` = xong. Nếu vẫn `429 free_daily_used`, xem §4.
-
-## 4. Khi một account cạn
-
-- **Trong lượt đang chạy:** API trả `429 free_daily_used` → `failover.on` có `rate_limit` → cùng lượt đó đi tiếp bằng account kia (provider `nodecode-free-b`), context nguyên.
-- **Cho các lượt sau:** `free-watch` đọc `history.db` (event `turn.provider_retry` / `turn.provider_fallback` có `status`, `code`, và chính câu "It can send again … (at 2026-11-23 16:18:57 UTC)"), ghép với `free-route.log` để biết **account nào** đã phục vụ lượt đó, rồi đặt `down_until` = đúng mốc đó. Từ giây sau, `free-route-a` tự trả key B — lượt mới **không** phí một request 429 nào.
-- **Hết hạn mốc:** `usable()` tự cho account trở lại; không cần ai bật.
-
-Xem trạng thái: `/home/boxes/.nodecode/bin/free-route status`, `journalctl --user -u free-watch -n 20`.
-
-## 5. Hạn mức free (bảng chính thức, `docs/models.mdx`)
-
-| Yếu tố | Giá trị |
-|---|---|
-| Model | chỉ `nodecode-cyber-v1` |
-| Client | chỉ Nodecode CLI (khoá free từ chối mọi client khác, kể cả `curl` cùng User-Agent) |
-| Context | 1M |
-| Đồng thời | 2 request/account |
-| Một ngày | **10M token** trong 24h trượt → `429 free_daily_used` + giờ gửi lại |
-| Một phút | 30 request → `429 free_rate_limited` + `Retry-After` (CLI tự chờ) |
-| Tải | 503 `free_capacity_busy` sau 30 s |
-
-## 6. Việc còn lại của bạn
-
-- Dán key B (§2 → §3). Trước đó, khi A cạn, chain rơi xuống `experientiallabs` (deepseek) — vẫn chạy, nhưng không còn là Cyber v1 free.
-- Nếu muốn thêm account C: thêm `"nodecode-free-c": { ... "api_key": "!…/free-route c" }`, thêm vào `chain`, và một dòng trong `UNDER` của `free-watch`/`free-route` (`b`→`c` theo cùng khuôn). Quá hai account thì nên đổi sang đọc danh sách từ `free-accounts.json` thay vì sửa script.
+Footer hiện `nodecode-free-3` + trả lời = răng đó sống. Còn `429 free_daily_used` = account của răng đó đã cạn, xem `status`.

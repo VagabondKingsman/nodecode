@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
-"""free-watch — mark a free account out, for exactly as long as the API said.
+"""free-watch — mark an account out for exactly as long as the API said.
 
 nodecode writes every attempt into history.db: turn.provider_retry and
-turn.provider_fallback carry the provider id, the HTTP status, and the JSON
+turn.provider_fallback carry the provider id, the HTTP status and the JSON
 detail, whose message names the code (free_daily_used, free_rate_limited,
 free_capacity_busy) and, for the daily one, the moment the account may send
-again. The routers record which ACCOUNT they served, per resolution, in
-free-route.log. Putting the two together pins a failure on an account and
-marks it out until the API's own reset -- no guesswork, no probing the
-network (a free key refuses every client but the CLI anyway).
+again. free-route.log records which ACCOUNT served which provider id when, so
+the two together pin a failure on an account and write its down_until -- no
+probing (a free key refuses every client but the CLI anyway) and no guesswork.
 
-usage: free-watch [--window MINUTES] [--quiet]   (writes the marker it finds)
-       free-watch --dry-run                     (says what it would write)
+usage: free-watch [--window MINUTES] [--quiet]
+       free-watch --dry-run    say what it would write, write nothing
+       free-watch --recover    clear a mark when that account answered anyway
 """
 import json, os, re, sqlite3, sys, time, datetime
 
@@ -19,9 +19,12 @@ HOME = os.path.expanduser("~/.nodecode")
 STORE = os.path.join(HOME, "free-accounts.json")
 DB = os.path.join(HOME, "history.db")
 LOG = os.path.join(HOME, "free-route.log")
-UNDER = {"a": "nodecode-free", "b": "nodecode-free-b"}
-PROVIDER = {v: k for k, v in UNDER.items()}
+ALIAS = {"a": "nodecode-free", "b": "nodecode-free-b"}
 SHORT = {"free_rate_limited": 60, "free_capacity_busy": 120}
+
+
+def free_provider(name):
+    return bool(name) and str(name).startswith("nodecode-free")
 
 
 def load():
@@ -36,64 +39,83 @@ def save(data):
 
 
 def stamp(text):
-    text = text[:19]
-    return datetime.datetime.strptime(text, "%Y-%m-%dT%H:%M:%S").replace(
+    return datetime.datetime.strptime(text[:19], "%Y-%m-%dT%H:%M:%S").replace(
         tzinfo=datetime.timezone.utc).timestamp()
 
 
-def failures(window_minutes):
-    """Newest failure per provider id: (at, code, reset-epoch or None)."""
-    since = (datetime.datetime.now(datetime.timezone.utc)
-             - datetime.timedelta(minutes=window_minutes)).strftime("%Y-%m-%dT%H:%M:%S")
-    con = sqlite3.connect("file:%s?mode=ro" % DB, uri=True)
-    out = {}
-    rows = con.execute(
-        "select kind, occurred_at, json_extract(payload,'$.provider'),"
-        " json_extract(payload,'$.from-provider'), json_extract(payload,'$.status'),"
-        " json_extract(payload,'$.detail'), json_extract(payload,'$.reason')"
-        " from events where kind in ('turn.provider_retry','turn.provider_fallback')"
-        " and occurred_at > ? order by log_position", (since,)).fetchall()
-    con.close()
-    for kind, at, provider, from_provider, status, detail, reason in rows:
-        provider = provider or from_provider
-        if provider not in PROVIDER:
-            continue
-        if str(status) not in ("429", "503") and not (reason == "rate_limit"):
-            continue
-        code, reset = None, None
-        try:
-            message = json.loads(detail or "{}").get("error", {}).get("message", "")
-            code = json.loads(detail or "{}").get("error", {}).get("code")
-            m = re.search(r"\(at (\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) UTC\)", message)
-            if m:
-                reset = datetime.datetime.strptime(
-                    m.group(1), "%Y-%m-%d %H:%M:%S").replace(
-                    tzinfo=datetime.timezone.utc).timestamp()
-        except (ValueError, AttributeError, TypeError):
-            pass
-        out[provider] = (at, code, reset)          # last row wins: newest
-    return out
-
-
-def served(provider, at):
-    """Which account the router served for PROVIDER just before AT."""
-    key, at_epoch = PROVIDER[provider], stamp(at)
-    best = None
+def log_entries():
+    out = []
     try:
         with open(LOG) as fh:
             for line in fh:
                 parts = line.split()
-                if len(parts) == 3 and parts[1] == key:
-                    when = float(parts[0])
-                    if when <= at_epoch + 1:
-                        best = parts[2]
+                if len(parts) >= 3:
+                    out.append((float(parts[0]), ALIAS.get(parts[1], parts[1]), parts[2]))
     except OSError:
-        return None
-    return best
+        pass
+    return out
+
+
+def served(provider, at):
+    best = None
+    for when, asked, name in log_entries():
+        if asked == provider and when <= at + 1 and (best is None or when >= best[0]):
+            best = (when, name)
+    return best[1] if best else None
+
+
+def events(window_minutes):
+    since = (datetime.datetime.now(datetime.timezone.utc)
+             - datetime.timedelta(minutes=window_minutes)).strftime("%Y-%m-%dT%H:%M:%S")
+    con = sqlite3.connect("file:%s?mode=ro" % DB, uri=True)
+    rows = con.execute(
+        "select kind, occurred_at, json_extract(payload,'$.provider'),"
+        " json_extract(payload,'$.from-provider'), json_extract(payload,'$.status'),"
+        " json_extract(payload,'$.detail')"
+        " from events where kind in ('turn.provider_retry','turn.provider_fallback','turn.usage')"
+        " and occurred_at > ? order by log_position", (since,)).fetchall()
+    con.close()
+    return rows
+
+
+def failures(rows):
+    """Newest failure per free provider id: (at, code, reset-epoch or None)."""
+    out = {}
+    for kind, at, provider, from_provider, status, detail in rows:
+        if kind == "turn.usage":
+            continue
+        provider = provider or from_provider
+        if not free_provider(provider) or str(status) not in ("429", "503"):
+            continue
+        code, reset = None, None
+        try:
+            error = json.loads(detail or "{}").get("error") or {}
+            code = error.get("code")
+            m = re.search(r"\(at (\d\d\d\d-\d\d-\d\d \d\d:\d\d:\d\d) UTC\)", error.get("message", ""))
+            if m:
+                reset = datetime.datetime.strptime(
+                    m.group(1), "%Y-%m-%d %H:%M:%S").replace(
+                    tzinfo=datetime.timezone.utc).timestamp()
+        except (ValueError, TypeError):
+            pass
+        out[provider] = (at, code, reset)
+    return out
+
+
+def answers(rows):
+    """Epoch of the newest answer per account, as the log attributed them."""
+    out = {}
+    for kind, at, provider, _from, _status, _detail in rows:
+        if kind != "turn.usage" or not free_provider(provider):
+            continue
+        name = served(provider, stamp(at))
+        if name:
+            out[name] = max(out.get(name, 0), stamp(at))
+    return out
 
 
 def main(argv):
-    window, quiet, dry = 1440, False, False
+    window, quiet, dry, recover = 1440, False, False, False
     i = 0
     while i < len(argv):
         if argv[i] == "--window":
@@ -102,14 +124,17 @@ def main(argv):
             quiet = True; i += 1
         elif argv[i] == "--dry-run":
             dry = True; i += 1
+        elif argv[i] == "--recover":
+            recover = True; i += 1
         else:
             i += 1
     data = load()
+    rows = events(window)
     now, changed = time.time(), []
-    for provider, (at, code, reset) in failures(window).items():
-        account = served(provider, at) or PROVIDER[provider]
-        entry = data.setdefault(account, {})
-        if not (entry.get("key") or "").strip():
+    for provider, (at, code, reset) in failures(rows).items():
+        name = served(provider, stamp(at))
+        entry = next((a for a in data["accounts"] if a["id"] == name), None) if name else None
+        if entry is None or not (entry.get("key") or "").strip():
             continue
         until = float(entry.get("down_until") or 0)
         if reset:
@@ -121,23 +146,31 @@ def main(argv):
         if target > now and target > until:
             entry["down_until"] = target
             entry["last_code"] = code or "unknown"
-            changed.append("%s out until %s (%s)" % (
-                account,
-                datetime.datetime.fromtimestamp(target, datetime.timezone.utc)
-                .strftime("%Y-%m-%d %H:%M:%S UTC"),
-                code or "unknown"))
+            entry["marked_at"] = now
+            changed.append("%s out until %s (%s)"
+                           % (entry["id"],
+                              datetime.datetime.fromtimestamp(target, datetime.timezone.utc)
+                              .strftime("%Y-%m-%d %H:%M:%S UTC"), code or "unknown"))
+    if recover:
+        for name, answered_at in answers(rows).items():
+            entry = next((a for a in data["accounts"] if a["id"] == name), None)
+            if entry and float(entry.get("down_until") or 0) > now \
+                    and answered_at > float(entry.get("marked_at") or 0):
+                entry.pop("down_until", None)
+                entry.pop("last_code", None)
+                entry.pop("marked_at", None)
+                changed.append("%s answered after its mark, back in service" % name)
     if changed and not dry:
         save(data)
     if not quiet:
         for line in changed or ["nothing to write"]:
-            print(("would mark " if dry else "marked ").rjust(6) + line if changed else line)
-        for name in ("a", "b"):
-            e = data.get(name) or {}
-            until = float(e.get("down_until") or 0)
-            state = ("no key" if not (e.get("key") or "").strip()
-                     else ("out %d min (%s)" % ((until - now) // 60, e.get("last_code", ""))
+            print(("would mark " if dry else "") + line)
+        for entry in data["accounts"]:
+            until = float(entry.get("down_until") or 0)
+            state = ("no key" if not (entry.get("key") or "").strip()
+                     else ("out %d min (%s)" % ((until - now) // 60, entry.get("last_code", ""))
                            if until > now else "ok"))
-            print("%s: %s" % (name, state))
+            print("%s: %s" % (entry["id"], state))
     return 0
 
 
