@@ -25,6 +25,24 @@ loginctl enable-linger "$USER"      # để gateway sống tiếp sau khi SSH th
 
 ---
 
+## Đường nhanh: một lệnh (khuyến nghị)
+
+```sh
+git clone https://VagabondKingsman:<TOKEN>@github.com/VagabondKingsman/nodecode.git
+cd nodecode
+bash tools/boxes/bootstrap-from-fork.sh --dry-run     # xem nó sẽ làm gì
+bash tools/boxes/bootstrap-from-fork.sh               # làm
+bash tools/boxes/bootstrap-from-fork.sh --check       # kiểm lại khi đã có home
+```
+
+Script này **idempotent** — chạy lại là báo cáo, không phá gì. Nó làm 7 bước: kiểm công cụ → cài bản phát hành (hoặc `--build` để build từ checkout) → tạo home + config từ snapshot → chép ký ức/skill → cài 13 cell từ hub → dựng pool free-account (script + `free-rungs 3` + timer) → bật gateway. Cuối cùng nó in ra đúng những gì **bạn** phải làm: key nodecode.ai, key provider, `gh-token`, chọn model.
+
+Cần trên máy: `git`, `curl`, `python3`, `tar`; `systemd --user` nếu muốn gateway và watcher chạy nền (`--no-gateway` để bỏ). Build từ source thì thêm `SBCL 2.6.0` + Quicklisp + `just` (§1 nhánh B).
+
+Các chương dưới đây là bản làm tay của đúng các bước đó — đọc khi cần hiểu, hoặc khi script dừng ở đâu đó.
+
+---
+
 ## 1. Cài nodecode — chọn một trong hai nhánh
 
 ### Nhánh A (khuyến nghị): bản phát hành chính thức
@@ -174,6 +192,18 @@ Restart=always
 ```
 
 Muốn chạy không cần systemd (container, VPS không có user session): `nohup nodecode serve >~/.nodecode/serve.log 2>&1 &`.
+
+### 2.5 Pool nhiều account free (tuỳ chọn, nhưng nên có)
+
+Nếu bạn có nhiều account nodecode.ai free (mỗi account 10M token/24h), dựng pool để tự chuyển và chia đều:
+
+```sh
+cp tools/free-accounts/* ~/.nodecode/bin/ && chmod 755 ~/.nodecode/bin/free-*
+~/.nodecode/bin/free-route add a < /tmp/a.key      # key đi qua stdin
+~/.nodecode/bin/free-rungs 3                       # provider + chain + wrapper, không restart
+```
+
+Chi tiết đầy đủ: **`FREE-ACCOUNTS.md`**. Script bootstrap đã làm sẵn phần này (thư mục + `free-rungs 3` + timer), chỉ còn key là của bạn.
 
 ---
 

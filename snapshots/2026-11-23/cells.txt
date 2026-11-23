@@ -1,4 +1,3 @@
-cell: .locks
 cell: antigravity
 cell: cursor-agent
 cell: cursor-agent-memory
