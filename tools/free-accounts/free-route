@@ -202,7 +202,7 @@ def order(data, rung=1):
     live.sort(key=rank)
     if rung > 1 and grace:
         # a later rung does not repeat an account that just served a call
-        fresh = [a for a in live if recent.get(a["id"], 0) < 2]
+        fresh = [a for a in live if not recent.get(a["id"])]
         live = fresh or live
     out = live
     if rung > 1:
