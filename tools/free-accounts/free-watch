@@ -1,0 +1,145 @@
+#!/usr/bin/env python3
+"""free-watch — mark a free account out, for exactly as long as the API said.
+
+nodecode writes every attempt into history.db: turn.provider_retry and
+turn.provider_fallback carry the provider id, the HTTP status, and the JSON
+detail, whose message names the code (free_daily_used, free_rate_limited,
+free_capacity_busy) and, for the daily one, the moment the account may send
+again. The routers record which ACCOUNT they served, per resolution, in
+free-route.log. Putting the two together pins a failure on an account and
+marks it out until the API's own reset -- no guesswork, no probing the
+network (a free key refuses every client but the CLI anyway).
+
+usage: free-watch [--window MINUTES] [--quiet]   (writes the marker it finds)
+       free-watch --dry-run                     (says what it would write)
+"""
+import json, os, re, sqlite3, sys, time, datetime
+
+HOME = os.path.expanduser("~/.nodecode")
+STORE = os.path.join(HOME, "free-accounts.json")
+DB = os.path.join(HOME, "history.db")
+LOG = os.path.join(HOME, "free-route.log")
+UNDER = {"a": "nodecode-free", "b": "nodecode-free-b"}
+PROVIDER = {v: k for k, v in UNDER.items()}
+SHORT = {"free_rate_limited": 60, "free_capacity_busy": 120}
+
+
+def load():
+    with open(STORE) as fh:
+        return json.load(fh)
+
+
+def save(data):
+    fd = os.open(STORE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        json.dump(data, fh, indent=2)
+
+
+def stamp(text):
+    text = text[:19]
+    return datetime.datetime.strptime(text, "%Y-%m-%dT%H:%M:%S").replace(
+        tzinfo=datetime.timezone.utc).timestamp()
+
+
+def failures(window_minutes):
+    """Newest failure per provider id: (at, code, reset-epoch or None)."""
+    since = (datetime.datetime.now(datetime.timezone.utc)
+             - datetime.timedelta(minutes=window_minutes)).strftime("%Y-%m-%dT%H:%M:%S")
+    con = sqlite3.connect("file:%s?mode=ro" % DB, uri=True)
+    out = {}
+    rows = con.execute(
+        "select kind, occurred_at, json_extract(payload,'$.provider'),"
+        " json_extract(payload,'$.from-provider'), json_extract(payload,'$.status'),"
+        " json_extract(payload,'$.detail'), json_extract(payload,'$.reason')"
+        " from events where kind in ('turn.provider_retry','turn.provider_fallback')"
+        " and occurred_at > ? order by log_position", (since,)).fetchall()
+    con.close()
+    for kind, at, provider, from_provider, status, detail, reason in rows:
+        provider = provider or from_provider
+        if provider not in PROVIDER:
+            continue
+        if str(status) not in ("429", "503") and not (reason == "rate_limit"):
+            continue
+        code, reset = None, None
+        try:
+            message = json.loads(detail or "{}").get("error", {}).get("message", "")
+            code = json.loads(detail or "{}").get("error", {}).get("code")
+            m = re.search(r"\(at (\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) UTC\)", message)
+            if m:
+                reset = datetime.datetime.strptime(
+                    m.group(1), "%Y-%m-%d %H:%M:%S").replace(
+                    tzinfo=datetime.timezone.utc).timestamp()
+        except (ValueError, AttributeError, TypeError):
+            pass
+        out[provider] = (at, code, reset)          # last row wins: newest
+    return out
+
+
+def served(provider, at):
+    """Which account the router served for PROVIDER just before AT."""
+    key, at_epoch = PROVIDER[provider], stamp(at)
+    best = None
+    try:
+        with open(LOG) as fh:
+            for line in fh:
+                parts = line.split()
+                if len(parts) == 3 and parts[1] == key:
+                    when = float(parts[0])
+                    if when <= at_epoch + 1:
+                        best = parts[2]
+    except OSError:
+        return None
+    return best
+
+
+def main(argv):
+    window, quiet, dry = 1440, False, False
+    i = 0
+    while i < len(argv):
+        if argv[i] == "--window":
+            window = int(argv[i + 1]); i += 2
+        elif argv[i] == "--quiet":
+            quiet = True; i += 1
+        elif argv[i] == "--dry-run":
+            dry = True; i += 1
+        else:
+            i += 1
+    data = load()
+    now, changed = time.time(), []
+    for provider, (at, code, reset) in failures(window).items():
+        account = served(provider, at) or PROVIDER[provider]
+        entry = data.setdefault(account, {})
+        if not (entry.get("key") or "").strip():
+            continue
+        until = float(entry.get("down_until") or 0)
+        if reset:
+            target = float(reset)
+        elif code in SHORT:
+            target = stamp(at) + SHORT[code]
+        else:
+            target = stamp(at) + 900
+        if target > now and target > until:
+            entry["down_until"] = target
+            entry["last_code"] = code or "unknown"
+            changed.append("%s out until %s (%s)" % (
+                account,
+                datetime.datetime.fromtimestamp(target, datetime.timezone.utc)
+                .strftime("%Y-%m-%d %H:%M:%S UTC"),
+                code or "unknown"))
+    if changed and not dry:
+        save(data)
+    if not quiet:
+        for line in changed or ["nothing to write"]:
+            print(("would mark " if dry else "marked ").rjust(6) + line if changed else line)
+        for name in ("a", "b"):
+            e = data.get(name) or {}
+            until = float(e.get("down_until") or 0)
+            state = ("no key" if not (e.get("key") or "").strip()
+                     else ("out %d min (%s)" % ((until - now) // 60, e.get("last_code", ""))
+                           if until > now else "ok"))
+            print("%s: %s" % (name, state))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

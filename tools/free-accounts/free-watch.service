@@ -1,0 +1,7 @@
+[Unit]
+Description=free-watch: mark a nodecode free account out from the store's own record
+After=nodecode-gateway.service
+
+[Service]
+Type=oneshot
+ExecStart=/home/boxes/.nodecode/bin/free-watch --quiet

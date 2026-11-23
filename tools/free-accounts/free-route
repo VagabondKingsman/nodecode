@@ -1,0 +1,130 @@
+#!/usr/bin/env python3
+"""free-route — the key a nodecode-free provider asks with, chosen per call.
+
+nodecode runs this through providers.<id>.api_key = "!<this>" on EVERY
+credential resolution (sh -lc, 10 s bound, never memoized), so a flip here is
+live at the next model call with no restart and no lost context.
+
+usage: free-route a|b        print that account's key, else the other's
+       free-route status     the table, never a key
+       free-route down a 3600   mark A down for an hour
+       free-route up a          clear the mark
+"""
+import json, os, sys, time
+
+HOME = os.path.expanduser("~/.nodecode")
+STORE = os.path.join(HOME, "free-accounts.json")
+
+
+def load():
+    with open(STORE) as fh:
+        return json.load(fh)
+
+
+LOG = os.path.join(HOME, "free-route.log")
+
+
+def log(asked_under, served):
+    """One line per resolution: which provider id asked, which account answered it."""
+    try:
+        if os.path.exists(LOG) and os.path.getsize(LOG) > 200000:
+            os.replace(LOG, LOG + ".1")
+        with open(LOG, "a") as fh:
+            fh.write("%.3f %s %s\n" % (time.time(), asked_under, served))
+    except OSError:
+        pass
+
+
+def save(data):
+    fd = os.open(STORE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        json.dump(data, fh, indent=2)
+
+
+def usable(entry):
+    if not (entry or {}).get("key", "").strip():
+        return False
+    until = entry.get("down_until") or 0
+    try:
+        return float(until) <= time.time()
+    except (TypeError, ValueError):
+        return True
+
+
+def main(argv):
+    if not argv:
+        return "usage: free-route a|b|status|down NAME SECONDS|up NAME"
+    verb, own = argv[0], (argv[1] if len(argv) > 1 else None)
+    if verb in ("a", "b"):
+        data = load()
+        other = "b" if verb == "a" else "a"
+        for name in (verb, other):
+            if usable(data.get(name)):
+                log(verb, name)
+                print(data[name]["key"].strip())
+                return 0
+        # Both out: ask with the one that comes back first, so the call's own 429
+        # carries the reset time that FREe-WATCH learns from.
+        holders = [n for n in (verb, other) if (data.get(n) or {}).get("key", "").strip()]
+        if holders:
+            name = min(holders, key=lambda n: float((data.get(n) or {}).get("down_until") or 0))
+            sys.stderr.write("free-route: both accounts out; asking with %s, which returns first" % name)
+            log(verb, name)
+            print(data[name]["key"].strip())
+            return 0
+        sys.stderr.write("free-route: neither account holds a key")
+        return 1
+    if verb == "clear" and own:
+        data = load()
+        data.setdefault(own, {}).pop("key", None)
+        save(data)
+        sys.stderr.write("free-route: account %s holds no key now\n" % own)
+        return 0
+    if verb == "set" and own:
+        # The key comes on stdin, never argv: `free-route set b` then paste it, so it
+        # touches neither ps nor the shell's history.
+        value = sys.stdin.readline().strip()
+        if not value:
+            sys.stderr.write("free-route: no key on stdin")
+            return 2
+        if not value.startswith("sk-nc-"):
+            sys.stderr.write("free-route: a nodecode key starts with sk-nc-, refusing this one")
+            return 2
+        data = load()
+        entry = data.setdefault(own, {})
+        entry["key"] = value
+        entry.pop("down_until", None)
+        entry.pop("last_code", None)
+        save(data)
+        sys.stderr.write("free-route: account %s holds a key of %d characters\n" % (own, len(value)))
+        return 0
+    if verb == "status":
+        data, now = load(), time.time()
+        for name in ("a", "b"):
+            e = data.get(name) or {}
+            until = e.get("down_until") or 0
+            state = "ok" if usable(e) else (
+                "no key" if not (e.get("key") or "").strip()
+                else "down %ds" % int(float(until) - now))
+            print("%s  %s  %s" % (name, state, (e.get("label") or "")))
+        return 0
+    if verb == "down" and own and len(argv) > 2:
+        data = load()
+        data.setdefault(own, {})["down_until"] = time.time() + float(argv[2])
+        save(data)
+        return 0
+    if verb == "up" and own:
+        data = load()
+        data.setdefault(own, {}).pop("down_until", None)
+        with open(STORE, "w") as fh:
+            json.dump(data, fh, indent=2)
+        return 0
+    return "usage: free-route a|b|status|down NAME SECONDS|up NAME"
+
+
+if __name__ == "__main__":
+    result = main(sys.argv[1:])
+    if isinstance(result, str):
+        sys.stderr.write(result)
+        sys.exit(2)
+    sys.exit(result)

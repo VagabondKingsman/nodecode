@@ -1,0 +1,2 @@
+#!/bin/sh
+exec /home/boxes/.nodecode/bin/free-route a
