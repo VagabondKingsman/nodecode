@@ -201,16 +201,13 @@ def order(data, rung=1):
     live = [a for a in data["accounts"] if usable(a)]
     live.sort(key=rank)
     if rung > 1 and grace:
-        # a later rung does not repeat an account that just served a call
+        # a later rung takes the best account that no recent call has spent yet,
+        # so a round walks distinct accounts instead of re-asking the dead one
         fresh = [a for a in live if not recent.get(a["id"])]
-        live = fresh or live
-    out = live
-    if rung > 1:
-        rest = [a for a in data["accounts"] if holds_key(a) and a not in live]
-        rest.sort(key=rank)
-        out = live + rest
-    if rung - 1 < len(out):
-        return out[rung - 1]
+        if fresh:
+            return fresh[0]
+    if rung - 1 < len(live):
+        return live[rung - 1]
     # past the end: the one that comes back first
     down = [a for a in data["accounts"] if holds_key(a)]
     down.sort(key=lambda a: float(a.get("down_until") or 0))
