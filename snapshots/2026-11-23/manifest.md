@@ -7,7 +7,7 @@
 - cây nguồn: c78fef6 merge upstream/main 4d5e26a into box main — nhánh main của fork, đã merge upstream/main
 - máy: boxes — Linux 6.1.189+
 - tên tệp trùng giữa các cell: 0 (đã thêm tiền tố tên cell) 
-- cập nhật lần cuối: 2026-11-23T17:14:34Z — thêm 5 ký ức mới, sửa 1 (fork, goal cell, cách làm việc với kernel)
+- cập nhật lần cuối: 2026-11-25T09:19:26Z — thêm 5 ký ức mới, sửa 1 (fork, goal cell, cách làm việc với kernel)
 - giá trị bị che trong config: 0
 
 ## Vì sao dạng văn bản

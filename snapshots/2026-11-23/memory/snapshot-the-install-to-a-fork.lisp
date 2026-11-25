@@ -8,6 +8,12 @@
   ;; /home/boxes/nodecode-upstream is a second clone whose remote 'fork' points back at
   ;; /home/boxes/nodecode. The older snapshot is snapshots/2026-11-17 (commit 6654568).
   ;;
+  ;; Refreshing an existing snapshot (2026-11-23, the everyday case): copy every .lisp of the
+  ;; four knowledge cells over snapshots/<date>/memory/ (a plain cp, the filenames are flat and
+  ;; collide only across cells, which the generator prefixes), recount with
+  ;; `ls memory/*.lisp | wc -l` and `grep -l define-skill`, rewrite the manifest's 'ký ức + skill'
+  ;; and 'cập nhật lần cuối' lines, then commit and push main. ~30 lines of python inline, and
+  ;; writing them to /tmp each time is the waste: keep the generator beside the snapshot.
   ;; What a snapshot holds, measured on 2026-11-23: memory/ = every .lisp of the knowledge
   ;; cells (antigravity, cursor-agent-memory, nodecode-experience, nodecode) verbatim, 428
   ;; files of which 229 are skills, a name collision prefixed with its cell name;
